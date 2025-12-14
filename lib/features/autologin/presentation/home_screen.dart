@@ -6,7 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:location/location.dart' as loc;
 import 'package:wal/core/models/wifi_config.dart';
 import 'package:wal/core/services/storage_service.dart';
-import 'package:wal/features/autologin/presentation/config_sheet.dart';
+import 'package:wal/features/autologin/presentation/config_editor_page.dart';
 import 'package:wal/features/autologin/presentation/debug_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -26,7 +26,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLocationGranted = true;
   bool _isNotificationGranted = true;
   bool _isLocationServiceEnabled = true;
-  bool _isSystemAlertWindowGranted = true;
 
   // Add this to your State class
   Timer? _statusPoller;
@@ -58,7 +57,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       // Silent check is usually enough here
-      _checkPermissions(requestDialog: false); 
+      _checkPermissions(requestDialog: false);
     }
   }
 
@@ -70,11 +69,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     PermissionStatus notifStatus;
 
     if (requestDialog) {
-      locStatus = await Permission.location.request();
+      locStatus = await Permission.locationAlways.request();
       notifStatus = await Permission.notification.request();
     } else {
       // Just check status without asking
-      locStatus = await Permission.location.status;
+      locStatus = await Permission.locationAlways.status;
       notifStatus = await Permission.notification.status;
     }
 
@@ -87,22 +86,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       serviceEnabled = await location.requestService();
     }
 
-    // 3. NEW: Check System Alert Window (Overlay)
-    // This permission handles its own "Request" behavior (opens settings page directly)
-    var overlayStatus = await Permission.systemAlertWindow.status;
-    if (overlayStatus.isDenied && requestDialog) {
-       await Permission.systemAlertWindow.request();
-       // Re-check after returning from settings
-       overlayStatus = await Permission.systemAlertWindow.status;
-    }
-
-    // 4. Update State
+    // Update State
     if (mounted) {
       setState(() {
         _isLocationGranted = locStatus.isGranted;
         _isNotificationGranted = notifStatus.isGranted;
         _isLocationServiceEnabled = serviceEnabled;
-        _isSystemAlertWindowGranted = overlayStatus.isGranted;
       });
     }
 
@@ -151,19 +140,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final updated = WifiConfig(
       ssid: config.ssid,
       url: config.url,
-      username: config.username,
-      password: config.password,
       isEnabled: !config.isEnabled,
+      actions: config.actions,
     );
     await _saveConfig(updated);
   }
 
-  void _showConfigSheet({WifiConfig? config}) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) =>
-          ConfigSheet(existingConfig: config, onSave: _saveConfig),
+  void _openConfigPage({WifiConfig? config}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            ConfigEditorPage(existingConfig: config, onSave: _saveConfig),
+      ),
     );
   }
 
@@ -176,7 +165,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: "Add Config",
-            onPressed: () => _showConfigSheet(),
+            onPressed: () => _openConfigPage(),
           ),
           IconButton(
             icon: const Icon(Icons.bug_report),
@@ -213,10 +202,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildPermissionWarning() {
     // Hide if all 4 checks pass
-    if (_isLocationGranted && 
-        _isNotificationGranted && 
-        _isLocationServiceEnabled && 
-        _isSystemAlertWindowGranted) {
+    if (_isLocationGranted &&
+        _isNotificationGranted &&
+        _isLocationServiceEnabled) {
       return const SizedBox.shrink();
     }
 
@@ -239,13 +227,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onTapAction = () async {
         await _checkPermissions(requestDialog: true);
       };
-    } else if (!_isSystemAlertWindowGranted) {
-      // NEW WARNING
-      errorText = "Need 'Display over Apps' to auto-launch.";
-      icon = Icons.layers_clear;
-      onTapAction = () async {
-         await Permission.systemAlertWindow.request();
-      };
     }
 
     return Material(
@@ -267,9 +248,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
               ),
-              Icon(Icons.arrow_forward_ios, 
-                size: 16, 
-                color: Theme.of(context).colorScheme.onErrorContainer
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 16,
+                color: Theme.of(context).colorScheme.onErrorContainer,
               ),
             ],
           ),
@@ -346,41 +328,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
         subtitle: Text(config.url),
-        trailing: PopupMenuButton(
-          onSelected: (value) {
-            if (value == 'edit') _showConfigSheet(config: config);
-            if (value == 'toggle') _toggleEnable(config);
-            if (value == 'delete') _deleteConfig(config.ssid);
-          },
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'edit',
-              child: Row(
-                children: [Icon(Icons.edit), SizedBox(width: 8), Text("Edit")],
-              ),
-            ),
-            PopupMenuItem(
-              value: 'toggle',
-              child: Row(
-                children: [
-                  Icon(config.isEnabled ? Icons.unpublished : Icons.check),
-                  const SizedBox(width: 8),
-                  Text(config.isEnabled ? "Disable" : "Enable"),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'delete',
-              child: Row(
-                children: [
-                  Icon(Icons.delete),
-                  SizedBox(width: 8),
-                  Text("Delete"),
-                ],
-              ),
-            ),
-          ],
-        ),
+        onTap: () => _openConfigPage(config: config),
+        // trailing: PopupMenuButton(
+        //   onSelected: (value) {
+        //     if (value == 'edit') _showConfigSheet(config: config);
+        //     if (value == 'toggle') _toggleEnable(config);
+        //     if (value == 'delete') _deleteConfig(config.ssid);
+        //   },
+        //   itemBuilder: (context) => [
+        //     const PopupMenuItem(
+        //       value: 'edit',
+        //       child: Row(
+        //         children: [Icon(Icons.edit), SizedBox(width: 8), Text("Edit")],
+        //       ),
+        //     ),
+        //     PopupMenuItem(
+        //       value: 'toggle',
+        //       child: Row(
+        //         children: [
+        //           Icon(config.isEnabled ? Icons.unpublished : Icons.check),
+        //           const SizedBox(width: 8),
+        //           Text(config.isEnabled ? "Disable" : "Enable"),
+        //         ],
+        //       ),
+        //     ),
+        //     const PopupMenuItem(
+        //       value: 'delete',
+        //       child: Row(
+        //         children: [
+        //           Icon(Icons.delete),
+        //           SizedBox(width: 8),
+        //           Text("Delete"),
+        //         ],
+        //       ),
+        //     ),
+        //   ],
+        // ),
       ),
     );
   }

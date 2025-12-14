@@ -45,3 +45,19 @@ class StorageService {
     await _storage.delete(key: ssid);
   }
 }
+
+enum FeatureFlags {
+  checkConnectivityBeforeLogin,
+  debugLogsEnabled;
+
+  static const _storage = FlutterSecureStorage();
+
+  Future<void> setFeatureFlag(bool isEnabled) async {
+    await _storage.write(key: toString(), value: isEnabled ? 'true' : 'false');
+  }
+
+  Future<bool> isEnabled() async {
+    String? value = await _storage.read(key: toString());
+    return value == 'true';
+  }
+}

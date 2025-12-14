@@ -7,6 +7,11 @@ class AppTheme {
       seedColor: Colors.blueAccent,
       brightness: Brightness.light,
     ),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: <TargetPlatform, PageTransitionsBuilder>{
+        TargetPlatform.android: PredictiveBackPageTransitionsBuilder()
+      },
+    )
   );
 
   static final darkTheme = ThemeData(
@@ -15,5 +20,10 @@ class AppTheme {
       seedColor: Colors.blueAccent,
       brightness: Brightness.dark,
     ),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: <TargetPlatform, PageTransitionsBuilder>{
+        TargetPlatform.android: PredictiveBackPageTransitionsBuilder()
+      },
+    )
   );
 }

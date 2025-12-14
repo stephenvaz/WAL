@@ -1,18 +1,30 @@
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:wal/core/models/wifi_config.dart';
+import 'package:wal/core/models/form_action.dart';
 import 'package:wal/core/services/native_bridge.dart';
 import 'package:wal/core/utils/debug_utils.dart';
 
 class AutoLoginHandler {
   final NativeBridgeService _nativeBridge = NativeBridgeService();
   HeadlessInAppWebView? _headlessWebView;
+  bool _hasInjected = false; // Track if we've already injected
 
   Future<void> performAutoLogin({
-    required String url,
-    required String username,
-    required String password,
+    required WifiConfig config,
     required Function(String status) onStatusUpdate,
   }) async {
-    
+    void cleanupWebsiteLogin(InAppWebViewController controller) async {
+      printPageContent(controller, "After Injection");
+      // clear all caches and cookies to avoid session issues
+      await InAppWebViewController.clearAllCache();
+      await CookieManager.instance().deleteAllCookies();
+
+      // CLEANUP
+      final didUnbind = await _nativeBridge.unbindProcess();
+      onStatusUpdate("Login Sequence Complete.\nNetwork Unbound: $didUnbind");
+    }
+
+    _hasInjected = false; // Reset for new login attempt
     onStatusUpdate("Binding to WiFi...");
     bool bound = await _nativeBridge.bindProcessToWifi();
     if (!bound) {
@@ -21,83 +33,101 @@ class AutoLoginHandler {
     }
 
     onStatusUpdate("Loading Portal...");
-    
+
     _headlessWebView = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri(url)),
+      initialUrlRequest: URLRequest(url: WebUri(config.url)),
       initialSettings: InAppWebViewSettings(
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-        // Crucial for headless execution
-        javaScriptEnabled: true,
+        javaScriptEnabled: true, // Crucial for headless execution
       ),
       onReceivedServerTrustAuthRequest: (controller, challenge) async {
-        return ServerTrustAuthResponse(action: ServerTrustAuthResponseAction.PROCEED);
+        return ServerTrustAuthResponse(
+          action: ServerTrustAuthResponseAction.PROCEED,
+        );
       },
       onLoadStop: (controller, url) async {
+        // Only inject once on initial page load, not on post-login redirects
+        if (_hasInjected) {
+          dPrint(
+            "[AutoLoginHandler] Subsequent navigation detected, skipping injection: $url",
+          );
+          cleanupWebsiteLogin(controller);
+          return;
+        }
+
         onStatusUpdate("Page Loaded. Attempting Login...");
-        
-        // 1. Inject Credentials & Click Login
-        await _injectCredentials(controller, username, password);
-        
-        // 2. Wait for the page to process the login
-        // (Wait longer if the network is slow)
-        onStatusUpdate("Waiting for response...");
-        await Future.delayed(const Duration(seconds: 4));
-        
-        // 3. SCRAPE PAGE CONTENT
-        // We get the visible text of the body to verify success
-        var pageContent = await controller.evaluateJavascript(
-          source: "document.body.innerText"
-        );
 
-        dPrint("------------------------------------------------");
-        dPrint("PAGE CONTENT AFTER LOGIN ATTEMPT:");
-        dPrint(pageContent);
-        dPrint("------------------------------------------------");
+        printPageContent(controller, "Before Injection");
 
-        // 4. CLEANUP
-        await _nativeBridge.unbindProcess();
-        onStatusUpdate("Login Sequence Complete. Check Logs.");
+        // Inject Credentials & Click Login
+        await _injectCredentials(controller, config);
+        _hasInjected = true; // Mark as injected
+        onStatusUpdate("Credentials Injected. Waiting for response...");
+        await Future.delayed(const Duration(seconds: 5));
+        cleanupWebsiteLogin(controller);
       },
     );
 
     await _headlessWebView?.run();
   }
 
-  Future<void> _injectCredentials(InAppWebViewController controller, String user, String pass) async {
-    const String jsCode = """
-      try {
-        // 1. Fill User
-        var userField = document.getElementById('username') || document.querySelector('input[name="username"]');
-        if(userField) {
-           userField.value = '%USER%';
-           // Trigger input events in case the site uses React/Angular validation
-           userField.dispatchEvent(new Event('input', { bubbles: true }));
-        }
+  void printPageContent(
+    InAppWebViewController controller,
+    String identifier,
+  ) async {
+    var content = await controller.evaluateJavascript(
+      source: "document.body.innerText",
+    );
+    dPrint("[AutoLoginHandler] PAGE CONTENT ($identifier):\n$content");
+  }
 
-        // 2. Fill Pass
-        var passField = document.getElementById('password') || document.querySelector('input[name="password"]');
-        if(passField) {
-           passField.value = '%PASS%';
-           passField.dispatchEvent(new Event('input', { bubbles: true }));
-        }
+  Future<void> _injectCredentials(
+    InAppWebViewController controller,
+    WifiConfig config,
+  ) async {
+    final jsCode = _generateJsFromActions(config.actions);
+    dPrint("[AutoLoginHandler] Executing JS:\n$jsCode");
+    await controller.evaluateJavascript(source: jsCode);
+  }
 
-        // 3. Click Submit
-        var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
-        if(btn) {
-           btn.click();
-        } else {
-           // Fallback: Try submitting the form directly if button is missing
-           var form = document.getElementById('loginForm') || document.querySelector('form');
-           if(form) form.submit();
-        }
-      } catch(e) { console.log(e); }
-    """;
+  String _generateJsFromActions(List<FormAction> actions) {
+    final buffer = StringBuffer();
+    buffer.writeln("try {");
 
-    String formattedJs = jsCode
-        .replaceAll('%USER%', user)
-        .replaceAll('%PASS%', pass);
+    // Sort by order
+    final sortedActions = List<FormAction>.from(actions)
+      ..sort((a, b) => a.order.compareTo(b.order));
 
-    await controller.evaluateJavascript(source: formattedJs);
+    for (var action in sortedActions) {
+      final selector = action.selector.replaceAll("'", "\\'"); // Escape quotes
+
+      switch (action.type) {
+        case FormActionType.setValue:
+          final value = (action.value ?? '').replaceAll("'", "\\'");
+
+          buffer.writeln("""
+            var elem_${action.order} = document.querySelector('$selector');
+            if (elem_${action.order}) {
+              elem_${action.order}.value = '$value';
+              elem_${action.order}.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          """);
+          break;
+
+        case FormActionType.click:
+          buffer.writeln("""
+            var btn_${action.order} = document.querySelector('$selector');
+            if (btn_${action.order}) {
+              btn_${action.order}.disabled = false;
+              btn_${action.order}.click();
+            }
+          """);
+          break;
+      }
+    }
+
+    buffer.writeln("} catch(e) { console.log('AutoLogin Error:', e); }");
+    return buffer.toString();
   }
 
   void dispose() {

@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wal/core/services/auto_login_manager.dart';
+import 'package:wal/core/utils/log_service.dart';
 import 'package:wal/features/autologin/presentation/home_screen.dart';
 import 'core/services/background_service.dart';
 import 'core/constants/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  await BackgroundServiceManager.initialize();
+  await LogService().initialize();
   AutoLoginManager().initialize();
+  BackgroundServiceManager.initialize();
   
   runApp(const MyApp());
 }
@@ -19,19 +21,15 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Auto WiFi Login',
+      title: 'WAL - WiFi Auto Login',
       themeMode: ThemeMode.system,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      
-      // CRITICAL: Connect the key here!
-      navigatorKey: AutoLoginManager().navigatorKey, 
       
       home: const HomeScreen(),
     );
   }
 }
-
 // lib/
 // ├── core/
 // │   ├── constants/

@@ -11,9 +11,10 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import android.os.Bundle
 import android.view.WindowManager
+import io.flutter.plugin.common.StandardMethodCodec
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.stephen.wal/network_utils"
+    private val ACTIVITY_CHANNEL = "com.stephen.wal/activity_controls"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,16 +37,14 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val taskQueue = flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue()
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            if (call.method == "bindProcessToWifi") {
-                val success = bindProcessToWifi()
-                result.success(success)
-            } else if (call.method == "unbindProcess") {
-                val success = unbindProcess()
-                result.success(success)
-            } else if (call.method == "minimizeApp") {
-                // Clear the "Keep Screen On" flag before minimizing
+        // Activity-specific methods via a dedicated channel.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger,
+                      ACTIVITY_CHANNEL,
+                      StandardMethodCodec.INSTANCE,
+                      taskQueue).setMethodCallHandler { call, result ->
+            if (call.method == "minimizeApp") {
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 moveTaskToBack(true)
                 result.success(true)
@@ -55,38 +54,5 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    private fun bindProcessToWifi(): Boolean {
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-
-        // Find the currently connected WIFI network
-        val wifiNetwork = connectivityManager.allNetworks.firstOrNull { network ->
-            val caps = connectivityManager.getNetworkCapabilities(network)
-            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-        }
-
-        return if (wifiNetwork != null) {
-            // Force this app process to route traffic via that WiFi
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                connectivityManager.bindProcessToNetwork(wifiNetwork)
-            } else {
-                @Suppress("DEPRECATION")
-                ConnectivityManager.setProcessDefaultNetwork(wifiNetwork)
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    private fun unbindProcess(): Boolean {
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        // Release the binding so the app can use normal internet (4G/5G) again
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            connectivityManager.bindProcessToNetwork(null)
-        } else {
-            @Suppress("DEPRECATION")
-            ConnectivityManager.setProcessDefaultNetwork(null)
-        }
-        return true
-    }
+    // Network binding is handled by wal_network_utils plugin for all engines
 }

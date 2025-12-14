@@ -1,15 +1,11 @@
 import 'dart:async';
 import 'dart:convert'; // Required for JSON
-import 'package:android_intent_plus/android_intent.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-// import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:network_info_plus/network_info_plus.dart';
+import 'package:internet_connection_checker_plus/internet_connection_checker_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:wal/core/utils/debug_utils.dart';
+import 'native_bridge.dart';
 import 'storage_service.dart';
-import 'package:android_intent_plus/flag.dart';
 
 class BackgroundServiceManager {
   static Future<void> initialize() async {
@@ -38,7 +34,7 @@ class BackgroundServiceManager {
         isForegroundMode: true,
         notificationChannelId: 'auto_wifi_monitor',
         initialNotificationTitle: 'AutoWiFi Active',
-        initialNotificationContent: 'Monitoring network...',
+        initialNotificationContent: 'Listening for WiFi connections',
         foregroundServiceNotificationId: 888,
         foregroundServiceTypes: [AndroidForegroundType.dataSync],
       ),
@@ -52,75 +48,73 @@ class BackgroundServiceManager {
 
 @pragma('vm:entry-point')
 void onBackgroundStart(ServiceInstance service) async {
-  final storage = StorageService(); // Ensure this service works in isolation
+  void dPrint(Object? object) {
+    service.invoke('log', {'message': object});
+  }
 
+  final storage = StorageService();
+  final nativeBridge = NativeBridgeService();
   service.updateNotification();
 
-  Connectivity().onConnectivityChanged.listen((
-    List<ConnectivityResult> results,
-  ) async {
-    dPrint("[Background Service] Connectivity Changed - $results");
+  // Initialize Wi-Fi state listener on native side
+  await nativeBridge.initializeWiFiStateListener();
 
-    bool isLocationServiceEnabled =
-        await Permission.location.serviceStatus.isEnabled;
+  // Listen for Wi-Fi state changes (connects/disconnects)
+  nativeBridge.getWiFiStateStream().listen((wifiState) async {
+    try {
+      final String? ssid = wifiState['ssid'] as String?;
+      final String? state = wifiState['state'] as String?;
 
-    if (!isLocationServiceEnabled) {
-      dPrint("[Background Service] Location Service is OFF");
+      dPrint('[Background Service] Wi-Fi state changed: $ssid - $state');
 
-      // Update Notification to warn user
-      if (service is AndroidServiceInstance) {
-        service.setForegroundNotificationInfo(
-          title: "AutoLogin Paused",
-          content: "Location (GPS) is disabled. Cannot scan WiFi.",
-        );
+      if (state != 'CONNECTED' || ssid == null) {
+        dPrint('[Background Service] Wi-Fi disconnected or invalid state');
+        return;
       }
-      return; // STOP HERE. Cannot get SSID without GPS on Android 8.1+
-    }
 
-    if (results.contains(ConnectivityResult.wifi)) {
-      final info = NetworkInfo();
-      String? wifiName = await info.getWifiName();
+      bool isLocationServiceEnabled =
+          await Permission.locationAlways.serviceStatus.isEnabled;
 
-      if (wifiName != null) {
-        String cleanSSID = wifiName.replaceAll('"', '');
+      if (!isLocationServiceEnabled) {
+        dPrint('[Background Service] Location Service is OFF');
+        if (service is AndroidServiceInstance) {
+          service.setForegroundNotificationInfo(
+            title: 'AutoLogin Paused',
+            content: 'Location (GPS) is disabled. Cannot scan WiFi.',
+          );
+        }
+        return;
+      }
 
-        // Use the raw read because we are in a background isolate
-        // and we need to manually parse the JSON here
-        String? jsonString = await storage.getRawData(cleanSSID);
-        dPrint("[Background Service] Detected WiFi Connection: $cleanSSID");
-        if (jsonString != null) {
-          try {
-            final Map<String, dynamic> configMap = jsonDecode(jsonString);
+      String cleanSSID = ssid.replaceAll('"', '');
+      dPrint('[Background Service] Detected WiFi Connection: $cleanSSID');
 
-            bool isEnabled = configMap['isEnabled'] ?? true;
+      // Check if we have a stored config for this SSID
+      String? jsonString = await storage.getRawData(cleanSSID);
+      if (jsonString != null) {
+        try {
+          final Map<String, dynamic> configMap = jsonDecode(jsonString);
+          bool isEnabled = configMap['isEnabled'] ?? true;
 
-            if (isEnabled) {
-              // Pass the entire JSON object back to the main UI Isolate
-              dPrint("[Background] Launching App to handle login...");
-              
-              // We use an Intent to bring the Activity to the Front
-              final intent = AndroidIntent(
-                action: 'android.intent.action.MAIN',
-                category: 'android.intent.category.LAUNCHER',
-                package: 'com.stephen.wal',
-                componentName: 'com.stephen.wal.MainActivity',
-                flags: <int>[
-                  Flag.FLAG_ACTIVITY_NEW_TASK, // Mandatory for background launch
-                  Flag.FLAG_ACTIVITY_REORDER_TO_FRONT, // Bring to top if already running
-                  Flag.FLAG_ACTIVITY_SINGLE_TOP,
-                ],
-                // We pass the config as an "Extra" so the main app knows WHY it opened
-                arguments: {'config': jsonString},
-              );
-              
-              await intent.launch();
-              service.invoke('trigger_login', {'config': jsonString});
-            }
-          } catch (e) {
-            dPrint("[Background Service] Error parsing JSON: $e");
+          final isInternetConnectivityAvailable =
+              await InternetConnection().hasInternetAccess
+              && await FeatureFlags.checkConnectivityBeforeLogin.isEnabled();
+
+          if (isEnabled && !isInternetConnectivityAvailable) {
+            dPrint('[Background] Launching App to handle login...');
+            service.invoke('trigger_login', {'config': jsonString});
+          } else {
+            dPrint(
+              '[Background Service] Skipped.\n'
+              'Auto Connect: $isEnabled, Internet Access: $isInternetConnectivityAvailable',
+            );
           }
+        } catch (e) {
+          dPrint('[Background Service] Error parsing JSON: $e');
         }
       }
+    } catch (e) {
+      dPrint('[Background Service] Error processing Wi-Fi state: $e');
     }
   });
 }

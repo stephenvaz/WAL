@@ -35,14 +35,16 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   flutter_inappwebview: ^6.1.5
-  connectivity_plus: ^7.0.0
   flutter_secure_storage: ^10.0.0
   flutter_background_service: ^5.1.0
   flutter_local_notifications: ^19.5.0
-  network_info_plus: ^7.0.0
   permission_handler: ^12.0.1
   location: ^8.0.1
-  android_intent_plus: ^6.0.0
+  wal_network_utils:
+    path: plugins/wal_network_utils
+  internet_connection_checker_plus: ^2.9.1+1
+  connectivity_plus: ^7.0.0
+  network_info_plus: ^7.0.0
 
 dev_dependencies:
   flutter_test:
