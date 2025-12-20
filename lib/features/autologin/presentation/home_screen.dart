@@ -58,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       // Silent check is usually enough here
       _checkPermissions(requestDialog: false);
+      _loadConfigs();
     }
   }
 
@@ -137,12 +138,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _toggleEnable(WifiConfig config) async {
-    final updated = WifiConfig(
-      ssid: config.ssid,
-      url: config.url,
-      isEnabled: !config.isEnabled,
-      actions: config.actions,
-    );
+    final updated = config.copyWith(isEnabled: !config.isEnabled,);
     await _saveConfig(updated);
   }
 
@@ -163,11 +159,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         title: const Text("WAL - WiFi Auto Login"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: "Add Config",
-            onPressed: () => _openConfigPage(),
-          ),
-          IconButton(
             icon: const Icon(Icons.bug_report),
             tooltip: "Debug Logs",
             onPressed: () => Navigator.push(
@@ -176,6 +167,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _openConfigPage,
+        tooltip: 'Add Config',
+        child: const Icon(Icons.add),
       ),
       body: Column(
         children: [

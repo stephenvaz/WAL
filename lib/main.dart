@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:wal/core/services/auto_login_manager.dart';
 import 'package:wal/core/utils/log_service.dart';
 import 'package:wal/features/autologin/presentation/home_screen.dart';
@@ -22,7 +21,6 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'WAL - WiFi Auto Login',
-      themeMode: ThemeMode.system,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       

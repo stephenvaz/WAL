@@ -33,8 +33,6 @@ class AutoLoginManager {
       );
     } catch (e) {
       dPrint("[AutoLoginManager] Error: $e");
-    } finally {
-      dPrint("[AutoLoginManager] Login Sequence Complete.");
     }
   }
 }

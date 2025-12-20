@@ -20,6 +20,7 @@ class _ConfigEditorPageState extends State<ConfigEditorPage> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _ssidController;
   late TextEditingController _urlController;
+  late TextEditingController _timeoutController;
 
   List<FormAction> _actions = [];
   int? _expandedActionIndex;
@@ -30,6 +31,9 @@ class _ConfigEditorPageState extends State<ConfigEditorPage> {
     final config = widget.existingConfig;
     _ssidController = TextEditingController(text: config?.ssid ?? '');
     _urlController = TextEditingController(text: config?.url ?? '');
+    _timeoutController = TextEditingController(
+      text: config != null ? config.timeoutInSeconds.toString() : '10.0',
+    );
     _actions = List.from(config?.actions ?? []);
   }
 
@@ -84,6 +88,9 @@ class _ConfigEditorPageState extends State<ConfigEditorPage> {
         url: _urlController.text.trim(),
         isEnabled: widget.existingConfig?.isEnabled ?? true,
         actions: _actions,
+        timeoutInSeconds: _timeoutController.text.isNotEmpty
+            ? double.tryParse(_timeoutController.text) ?? 10.0
+            : 10.0,
       );
       widget.onSave(config);
       Navigator.pop(context);
@@ -169,6 +176,26 @@ class _ConfigEditorPageState extends State<ConfigEditorPage> {
             if (value == null || value.trim().isEmpty) return 'URL required';
             if (!value.startsWith('http')) {
               return 'Must start with http:// or https://';
+            }
+            return null;
+          },
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _timeoutController,
+          keyboardType: TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: 'Timeout (seconds)',
+            hintText: 'e.g., 10.0',
+            prefixIcon: Icon(Icons.timer),
+            border: OutlineInputBorder(),
+          ),
+          validator: (value) {
+            if (value == null || value.trim().isEmpty)
+              return 'Timeout required';
+            final parsed = double.tryParse(value);
+            if (parsed == null || parsed <= 0) {
+              return 'Enter a valid positive number';
             }
             return null;
           },

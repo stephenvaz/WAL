@@ -1,27 +1,40 @@
+import 'dart:async';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:internet_connection_checker_plus/internet_connection_checker_plus.dart';
 import 'package:wal/core/models/wifi_config.dart';
 import 'package:wal/core/models/form_action.dart';
 import 'package:wal/core/services/native_bridge.dart';
+import 'package:wal/core/services/storage_service.dart';
 import 'package:wal/core/utils/debug_utils.dart';
 
 class AutoLoginHandler {
   final NativeBridgeService _nativeBridge = NativeBridgeService();
   HeadlessInAppWebView? _headlessWebView;
-  bool _hasInjected = false; // Track if we've already injected
+  bool _hasInjected = false; // Tracks if we've already injected
+  Timer? _cleanupTimer; // Tracks the cleanup timer
 
   Future<void> performAutoLogin({
     required WifiConfig config,
     required Function(String status) onStatusUpdate,
   }) async {
-    void cleanupWebsiteLogin(InAppWebViewController controller) async {
+    Future<void> cleanupWebsiteLogin(InAppWebViewController controller) async {
       printPageContent(controller, "After Injection");
-      // clear all caches and cookies to avoid session issues
+      // Clear all caches and cookies to avoid session issues
       await InAppWebViewController.clearAllCache();
       await CookieManager.instance().deleteAllCookies();
 
       // CLEANUP
       final didUnbind = await _nativeBridge.unbindProcess();
-      onStatusUpdate("Login Sequence Complete.\nNetwork Unbound: $didUnbind");
+      onStatusUpdate("Login Sequence Complete.\nNetwork Unbind: $didUnbind");
+    }
+
+    void scheduleCleanup(InAppWebViewController controller) {
+      _cleanupTimer?.cancel();
+      dPrint("[AutoLoginHandler] Scheduling cleanup in ${config.timeoutInSeconds} seconds.");
+      _cleanupTimer = Timer(
+        Duration(milliseconds: (config.timeoutInSeconds * 1000).toInt()),
+        () => cleanupWebsiteLogin(controller),
+      );
     }
 
     _hasInjected = false; // Reset for new login attempt
@@ -29,6 +42,16 @@ class AutoLoginHandler {
     bool bound = await _nativeBridge.bindProcessToWifi();
     if (!bound) {
       onStatusUpdate("Error: Could not bind to WiFi network.");
+      return;
+    }
+
+    final isInternetConnectivityAvailable =
+        await InternetConnection().hasInternetAccess &&
+        await FeatureFlags.checkConnectivityBeforeLogin.isEnabled();
+
+    if (isInternetConnectivityAvailable) {
+      onStatusUpdate("Internet connectivity detected. Skipping login.");
+      await _nativeBridge.unbindProcess();
       return;
     }
 
@@ -46,12 +69,10 @@ class AutoLoginHandler {
         );
       },
       onLoadStop: (controller, url) async {
-        // Only inject once on initial page load, not on post-login redirects
         if (_hasInjected) {
-          dPrint(
-            "[AutoLoginHandler] Subsequent navigation detected, skipping injection: $url",
-          );
-          cleanupWebsiteLogin(controller);
+          // Subsequent navigation detected after injection, restart countdown
+          onStatusUpdate("Navigation detected. Restarting cleanup timer...");
+          scheduleCleanup(controller);
           return;
         }
 
@@ -59,12 +80,13 @@ class AutoLoginHandler {
 
         printPageContent(controller, "Before Injection");
 
-        // Inject Credentials & Click Login
+        // Inject Credentials & Perform Actions
         await _injectCredentials(controller, config);
         _hasInjected = true; // Mark as injected
         onStatusUpdate("Credentials Injected. Waiting for response...");
-        await Future.delayed(const Duration(seconds: 5));
-        cleanupWebsiteLogin(controller);
+
+        // Schedule cleanup after timeout
+        scheduleCleanup(controller);
       },
     );
 
@@ -131,6 +153,7 @@ class AutoLoginHandler {
   }
 
   void dispose() {
+    _cleanupTimer?.cancel();
     _headlessWebView?.dispose();
   }
 }

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert'; // Required for JSON
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:internet_connection_checker_plus/internet_connection_checker_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'native_bridge.dart';
 import 'storage_service.dart';
@@ -85,7 +84,6 @@ void onBackgroundStart(ServiceInstance service) async {
         }
         return;
       }
-
       String cleanSSID = ssid.replaceAll('"', '');
       dPrint('[Background Service] Detected WiFi Connection: $cleanSSID');
 
@@ -95,23 +93,17 @@ void onBackgroundStart(ServiceInstance service) async {
         try {
           final Map<String, dynamic> configMap = jsonDecode(jsonString);
           bool isEnabled = configMap['isEnabled'] ?? true;
-
-          final isInternetConnectivityAvailable =
-              await InternetConnection().hasInternetAccess
-              && await FeatureFlags.checkConnectivityBeforeLogin.isEnabled();
-
-          if (isEnabled && !isInternetConnectivityAvailable) {
+          if (isEnabled) {
             dPrint('[Background] Launching App to handle login...');
             service.invoke('trigger_login', {'config': jsonString});
           } else {
-            dPrint(
-              '[Background Service] Skipped.\n'
-              'Auto Connect: $isEnabled, Internet Access: $isInternetConnectivityAvailable',
-            );
+            dPrint('[Background Service] AutoLogin is disabled for $cleanSSID');
           }
         } catch (e) {
           dPrint('[Background Service] Error parsing JSON: $e');
         }
+      } else {
+        dPrint('[Background Service] No config found for SSID: $cleanSSID');
       }
     } catch (e) {
       dPrint('[Background Service] Error processing Wi-Fi state: $e');

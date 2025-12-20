@@ -5,13 +5,15 @@ class WifiConfig {
   final String ssid;
   final String url;
   final bool isEnabled;
-  final List<FormAction> actions; // Custom form actions
+  final List<FormAction> actions;
+  final double timeoutInSeconds;
 
   WifiConfig({
     required this.ssid,
     required this.url,
     this.isEnabled = true,
     List<FormAction>? actions,
+    this.timeoutInSeconds = 10.0,
   }) : actions = actions ?? [];
 
   // Serialization for Storage
@@ -21,48 +23,22 @@ class WifiConfig {
       'url': url,
       'isEnabled': isEnabled,
       'actions': actions.map((a) => a.toMap()).toList(),
+      'timeoutInSeconds': timeoutInSeconds,
     };
   }
 
   factory WifiConfig.fromMap(Map<String, dynamic> map) {
-    // For backward compatibility: if old config has username/password but no actions,
-    // create default setValue actions
     List<FormAction> parsedActions =
         (map['actions'] as List<dynamic>?)
             ?.map((a) => FormAction.fromMap(a as Map<String, dynamic>))
             .toList() ??
         [];
-
-    // Migration: convert old username/password configs to actions
-    if (parsedActions.isEmpty &&
-        map.containsKey('username') &&
-        map.containsKey('password')) {
-      parsedActions = [
-        FormAction(
-          type: FormActionType.setValue,
-          selector: "#username, input[name='username']",
-          value: map['username'] ?? '',
-          order: 0,
-        ),
-        FormAction(
-          type: FormActionType.setValue,
-          selector: "#password, input[name='password']",
-          value: map['password'] ?? '',
-          order: 1,
-        ),
-        FormAction(
-          type: FormActionType.click,
-          selector: "button[type='submit'], input[type='submit']",
-          order: 2,
-        ),
-      ];
-    }
-
     return WifiConfig(
       ssid: map['ssid'] ?? '',
       url: map['url'] ?? '',
       isEnabled: map['isEnabled'] ?? true,
       actions: parsedActions,
+      timeoutInSeconds: (map['timeoutInSeconds'] as num?)?.toDouble() ?? 10.0,
     );
   }
 
@@ -70,4 +46,20 @@ class WifiConfig {
 
   factory WifiConfig.fromJson(String source) =>
       WifiConfig.fromMap(json.decode(source));
+
+  WifiConfig copyWith({
+    String? ssid,
+    String? url,
+    bool? isEnabled,
+    List<FormAction>? actions,
+    double? timeoutInSeconds,
+  }) {
+    return WifiConfig(
+      ssid: ssid ?? this.ssid,
+      url: url ?? this.url,
+      isEnabled: isEnabled ?? this.isEnabled,
+      actions: actions ?? this.actions,
+      timeoutInSeconds: timeoutInSeconds ?? this.timeoutInSeconds,
+    );
+  }
 }

@@ -1,4 +1,8 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wal/core/services/storage_service.dart';
 import 'package:wal/core/utils/log_service.dart';
 
@@ -11,6 +15,7 @@ class DebugScreen extends StatefulWidget {
 
 class _DebugScreenState extends State<DebugScreen> {
   final _logService = LogService();
+  final _storageService = StorageService();
   final _scrollController = ScrollController();
   bool _initialized = false;
   bool _connectivityCheckEnabled = false;
@@ -34,6 +39,88 @@ class _DebugScreenState extends State<DebugScreen> {
         curve: Curves.easeOut,
       );
     }
+  }
+
+  Future<void> _backupConfigs() async {
+    try {
+      final file = await _storageService.backupWifiConfigs();
+      if (!mounted) return;
+      final fileName = file.uri.pathSegments.isNotEmpty
+          ? file.uri.pathSegments.last
+          : 'backup';
+      _showToast('Backup saved: $fileName');
+    } catch (_) {
+      if (!mounted) return;
+      _showToast('Backup failed');
+    }
+  }
+
+  Future<void> _restoreConfigs() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+      if (result == null) return;
+
+      final path = result.files.single.path;
+      if (path == null) {
+        if (!mounted) return;
+        _showToast('No file selected');
+        return;
+      }
+
+      final restored = await _storageService.restoreWifiConfigs(File(path));
+      if (!mounted) return;
+      _showToast(
+        restored > 0 ? 'Restored $restored config(s)' : 'No configs restored',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      _showToast('Restore failed');
+    }
+  }
+
+  void _showToast(String message) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+
+    final entry = OverlayEntry(
+      builder: (context) => Positioned(
+        bottom: 24,
+        left: 24,
+        right: 24,
+        child: SafeArea(
+          child: Material(
+            color: Colors.transparent,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                child: Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.white),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    overlay.insert(entry);
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) entry.remove();
+    });
   }
 
   @override
@@ -99,6 +186,26 @@ class _DebugScreenState extends State<DebugScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _backupConfigs,
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('Backup'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _restoreConfigs,
+                    icon: const Icon(Icons.upload_outlined),
+                    label: const Text('Restore'),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             if (_logService.enabled)
               Expanded(
@@ -144,12 +251,22 @@ class _DebugScreenState extends State<DebugScreen> {
                                       horizontal: 8,
                                       vertical: 6,
                                     ),
-                                    child: Text(
-                                      entry.toString(),
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(fontFamily: 'monospace'),
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onLongPress: () async {
+                                        await Clipboard.setData(
+                                          ClipboardData(text: entry.toString()),
+                                        );
+                                        if (!mounted) return;
+                                        _showToast('Log copied');
+                                      },
+                                      child: Text(
+                                        entry.toString(),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(fontFamily: 'monospace'),
+                                      ),
                                     ),
                                   );
                                 },
