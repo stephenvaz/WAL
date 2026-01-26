@@ -8,12 +8,17 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
 /** WalNetworkUtilsPlugin: registers engine-wide MethodChannel and EventChannel for background isolates */
 class WalNetworkUtilsPlugin : FlutterPlugin, MethodCallHandler {
@@ -62,6 +67,13 @@ class WalNetworkUtilsPlugin : FlutterPlugin, MethodCallHandler {
             "helloWorld" -> result.success("Hello from WalNetworkUtilsPlugin")
             "getConnectedWifiSSID" -> result.success(getConnectedWifiSSID())
             "initWiFiStateListener" -> result.success(true) // EventChannel already set up
+            "validateWifiNetwork" -> {
+                val url = call.argument<String>("url")
+                thread {
+                    val success = performWifiValidation(url)
+                    Handler(Looper.getMainLooper()).post { result.success(success) }
+                }
+            }
             // Activity-only operations should be exposed elsewhere (e.g., separate channel)
             else -> result.notImplemented()
         }
@@ -130,6 +142,46 @@ class WalNetworkUtilsPlugin : FlutterPlugin, MethodCallHandler {
             }
         } else {
             null
+        }
+    }
+
+    private fun performWifiValidation(url: String?): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+
+        val connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val wifiNetwork = connectivityManager.allNetworks.firstOrNull { network ->
+            val caps = connectivityManager.getNetworkCapabilities(network)
+            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        } ?: return false
+
+        val checkUrl = url ?: "http://connectivitycheck.gstatic.com/generate_204"
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = wifiNetwork.openConnection(URL(checkUrl)) as HttpURLConnection
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.useCaches = false
+            connection.connect()
+
+            val code = connection.responseCode
+            val success = code == 204 || code == 200
+            connectivityManager.reportNetworkConnectivity(wifiNetwork, success)
+            success
+        } catch (e: Exception) {
+            android.util.Log.e("WalNetworkUtilsPlugin", "Validation error: ${e.message}")
+            try {
+                connectivityManager.reportNetworkConnectivity(wifiNetwork, false)
+            } catch (_: Exception) {
+                // Ignore
+            }
+            false
+        } finally {
+            try {
+                connection?.disconnect()
+            } catch (_: Exception) {
+                // Ignore
+            }
         }
     }
 

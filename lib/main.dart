@@ -8,9 +8,9 @@ import 'core/constants/app_theme.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LogService().initialize();
-  AutoLoginManager().initialize();
+  await AutoLoginManager().initialize();
   BackgroundServiceManager.initialize();
-  
+
   runApp(const MyApp());
 }
 
@@ -23,11 +23,11 @@ class MyApp extends StatelessWidget {
       title: 'WAL - WiFi Auto Login',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      
       home: const HomeScreen(),
     );
   }
 }
+
 // lib/
 // ├── core/
 // │   ├── constants/

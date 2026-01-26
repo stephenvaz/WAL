@@ -62,6 +62,22 @@ class NativeBridgeService {
     }
   }
 
+  /// Triggers Android's captive portal validation for the Wi-Fi network.
+  /// This helps clear the "Login" notification and switch the default route.
+  /// Optional [url] can be supplied to customize the validation endpoint.
+  Future<bool> validateWifiNetwork({String? url}) async {
+    try {
+      final bool result = await _networkChannel.invokeMethod(
+        'validateWifiNetwork',
+        {'url': url},
+      );
+      return result;
+    } on PlatformException catch (e) {
+      dPrint("[NativeBridge] Error validating Wi-Fi: ${e.message}");
+      return false;
+    }
+  }
+
   Future<void> minimizeApp() async {
     try {
       await _activityChannel.invokeMethod('minimizeApp');

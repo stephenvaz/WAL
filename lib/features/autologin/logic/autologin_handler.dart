@@ -13,24 +13,40 @@ class AutoLoginHandler {
   bool _hasInjected = false; // Tracks if we've already injected
   Timer? _cleanupTimer; // Tracks the cleanup timer
 
-  Future<void> performAutoLogin({
+  Future<bool> performAutoLogin({
     required WifiConfig config,
     required Function(String status) onStatusUpdate,
   }) async {
+    final completer = Completer<bool>();
+
+    void completeOnce(bool success) {
+      if (!completer.isCompleted) {
+        completer.complete(success);
+      }
+    }
+
     Future<void> cleanupWebsiteLogin(InAppWebViewController controller) async {
       printPageContent(controller, "After Injection");
       // Clear all caches and cookies to avoid session issues
       await InAppWebViewController.clearAllCache();
       await CookieManager.instance().deleteAllCookies();
 
+      // Trigger captive portal validation before unbinding
+      final didValidate = await _nativeBridge.validateWifiNetwork();
+      onStatusUpdate("Portal validation: $didValidate");
+
       // CLEANUP
       final didUnbind = await _nativeBridge.unbindProcess();
       onStatusUpdate("Login Sequence Complete.\nNetwork Unbind: $didUnbind");
+
+      completeOnce(didValidate);
     }
 
     void scheduleCleanup(InAppWebViewController controller) {
       _cleanupTimer?.cancel();
-      dPrint("[AutoLoginHandler] Scheduling cleanup in ${config.timeoutInSeconds} seconds.");
+      dPrint(
+        "[AutoLoginHandler] Scheduling cleanup in ${config.timeoutInSeconds} seconds.",
+      );
       _cleanupTimer = Timer(
         Duration(milliseconds: (config.timeoutInSeconds * 1000).toInt()),
         () => cleanupWebsiteLogin(controller),
@@ -42,7 +58,8 @@ class AutoLoginHandler {
     bool bound = await _nativeBridge.bindProcessToWifi();
     if (!bound) {
       onStatusUpdate("Error: Could not bind to WiFi network.");
-      return;
+      completeOnce(false);
+      return completer.future;
     }
 
     final isInternetConnectivityAvailable =
@@ -52,7 +69,8 @@ class AutoLoginHandler {
     if (isInternetConnectivityAvailable) {
       onStatusUpdate("Internet connectivity detected. Skipping login.");
       await _nativeBridge.unbindProcess();
-      return;
+      completeOnce(true);
+      return completer.future;
     }
 
     onStatusUpdate("Loading Portal...");
@@ -90,7 +108,14 @@ class AutoLoginHandler {
       },
     );
 
-    await _headlessWebView?.run();
+    try {
+      await _headlessWebView?.run();
+    } catch (e) {
+      onStatusUpdate("Error: Failed to launch login flow.");
+      completeOnce(false);
+    }
+
+    return completer.future;
   }
 
   void printPageContent(
