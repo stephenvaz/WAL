@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext for captive portal detection endpoints -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">connectivitycheck.gstatic.com</domain>
+        <domain includeSubdomains="true">clients3.google.com</domain>
+        <domain includeSubdomains="true">connectivitycheck.android.com</domain>
+    </domain-config>
+</network-security-config>
