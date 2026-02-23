@@ -94,26 +94,37 @@ class AutoLoginWorker(
         val success = performWebViewLogin(config)
 
         // Trigger captive portal validation before unbinding
+        var validated = false
         if (success) {
-            val validated = validateWifiNetwork()
+            validated = validateWifiNetwork()
             dLog(TAG, "Portal validation: $validated")
         }
 
         unbindProcess()
 
-        showNotification(ssid, success)
+        val finalSuccess = success && validated
+        showNotification(ssid, finalSuccess)
 
-        return if (success) Result.success() else Result.retry()
+        return if (finalSuccess) Result.success() else Result.retry()
+    }
+
+    /**
+     * Find the WiFi [Network] from all available networks.
+     * Unlike cm.activeNetwork, this works even when mobile data is the default route.
+     */
+    @Suppress("DEPRECATION") // No non-deprecated replacement for enumerating all networks
+    private fun findWifiNetwork(): android.net.Network? {
+        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        }
     }
 
     private fun bindProcessToWifi(): Boolean {
+        val wifiNetwork = findWifiNetwork() ?: return false
         val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val activeNetwork = cm.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(activeNetwork) ?: return false
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-            return cm.bindProcessToNetwork(activeNetwork)
-        }
-        return false
+        return cm.bindProcessToNetwork(wifiNetwork)
     }
 
     private fun unbindProcess() {
@@ -128,8 +139,7 @@ class AutoLoginWorker(
      * portal login is required.
      */
     private suspend fun isInternetReachable(): Boolean = withContext(IO) {
-        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val wifiNetwork = cm.activeNetwork ?: return@withContext false
+        val wifiNetwork = findWifiNetwork() ?: return@withContext false
 
         val checkUrl = "http://connectivitycheck.gstatic.com/generate_204"
         var connection: HttpURLConnection? = null
@@ -161,9 +171,7 @@ class AutoLoginWorker(
      */
     private suspend fun validateWifiNetwork(): Boolean = withContext(IO) {
         val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val wifiNetwork = cm.activeNetwork ?: return@withContext false
-        val caps = cm.getNetworkCapabilities(wifiNetwork) ?: return@withContext false
-        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return@withContext false
+        val wifiNetwork = findWifiNetwork() ?: return@withContext false
 
         val checkUrl = "http://connectivitycheck.gstatic.com/generate_204"
         var connection: HttpURLConnection? = null
@@ -193,6 +201,7 @@ class AutoLoginWorker(
     private suspend fun performWebViewLogin(config: WifiConfig): Boolean {
         val result = CompletableDeferred<Boolean>()
         var hasInjected = false
+        var hasCriticalError = false
         var webView: WebView? = null
         val mainHandler = Handler(Looper.getMainLooper())
         var completionRunnable: Runnable? = null
@@ -218,6 +227,13 @@ class AutoLoginWorker(
                         override fun onPageFinished(view: WebView?, url: String?) {
                             dLog(TAG, "Page loaded: $url")
 
+                            // If we hit a critical error (DNS, connection refused, etc.)
+                            // don't bother injecting into the error page.
+                            if (hasCriticalError) {
+                                dLog(TAG, "Skipping injection — critical error occurred.")
+                                return
+                            }
+
                             // Log page content before injection
                             view?.evaluateJavascript("document.body.innerText") { rawContent ->
                                 val content = rawContent
@@ -232,12 +248,13 @@ class AutoLoginWorker(
                             if (hasInjected) {
                                 dLog(TAG, "Post-injection navigation to: $url — restarting completion timer.")
                                 completionRunnable?.let { mainHandler.removeCallbacks(it) }
-                                completionRunnable = Runnable {
+                                val postRunnable = Runnable {
                                     if (!result.isCompleted) {
                                         result.complete(true)
                                     }
                                 }
-                                mainHandler.postDelayed(completionRunnable!!, cleanupDelayMs)
+                                completionRunnable = postRunnable
+                                mainHandler.postDelayed(postRunnable, cleanupDelayMs)
                                 return
                             }
 
@@ -247,12 +264,13 @@ class AutoLoginWorker(
                             view?.evaluateJavascript(jsCode) { _ ->
                                 dLog(TAG, "JS injection complete. Waiting ${cleanupDelayMs}ms.")
                                 completionRunnable?.let { mainHandler.removeCallbacks(it) }
-                                completionRunnable = Runnable {
+                                val jsRunnable = Runnable {
                                     if (!result.isCompleted) {
                                         result.complete(true)
                                     }
                                 }
-                                mainHandler.postDelayed(completionRunnable!!, cleanupDelayMs)
+                                completionRunnable = jsRunnable
+                                mainHandler.postDelayed(jsRunnable, cleanupDelayMs)
                             }
                         }
 
@@ -264,6 +282,16 @@ class AutoLoginWorker(
                             failingUrl: String?
                         ) {
                             dLogError(TAG, "WebView error: $errorCode - $description")
+                            // Fail on critical errors (DNS, connection refused, timeout, etc.)
+                            // Error codes: -2 = NAME_NOT_RESOLVED, -6 = CONNECTION_REFUSED,
+                            //              -8 = TIMEOUT, -1 = GENERIC
+                            if (errorCode <= -1) {
+                                hasCriticalError = true
+                                completionRunnable?.let { mainHandler.removeCallbacks(it) }
+                                if (!result.isCompleted) {
+                                    result.complete(false)
+                                }
+                            }
                         }
 
                         @SuppressLint("WebViewClientOnReceivedSslError")

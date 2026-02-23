@@ -8,14 +8,14 @@ espressoCore = "3.7.0"
 lifecycleRuntimeKtx = "2.10.0"
 activityCompose = "1.12.4"
 composeBom = "2026.02.00"
-navigationCompose = "2.9.0"
+navigationCompose = "2.9.7"
 lifecycleViewmodelCompose = "2.10.0"
-workRuntimeKtx = "2.10.1"
-datastorePreferences = "1.1.4"
-kotlinxSerializationJson = "1.8.1"
+workRuntimeKtx = "2.11.1"
+datastorePreferences = "1.2.0"
+kotlinxSerializationJson = "1.10.0"
 kotlinxCoroutinesAndroid = "1.10.2"
-webkit = "1.13.0"
-fragmentKtx = "1.8.6"
+webkit = "1.15.0"
+fragmentKtx = "1.8.9"
 playServicesLocation = "21.3.0"
 
 [libraries]
@@ -24,6 +24,7 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }

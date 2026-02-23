@@ -325,14 +325,15 @@ private fun ActionTile(
 ) {
     var dropdownExpanded by remember { mutableStateOf(false) }
 
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = {
-            if (it != SwipeToDismissBoxValue.Settled) {
-                onDelete()
-                true
-            } else false
+    val dismissState = rememberSwipeToDismissBoxState()
+
+    // React to completed swipe
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+            onDelete()
+            dismissState.snapTo(SwipeToDismissBoxValue.Settled)
         }
-    )
+    }
 
     SwipeToDismissBox(
         state = dismissState,

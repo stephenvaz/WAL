@@ -1,8 +1,5 @@
 package com.stephen.nativewal.ui.screens
 
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -59,7 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -172,12 +169,6 @@ fun HomeScreen(
                 onRequestBackgroundLocation = {
                     activity.requestBackgroundLocationPermission()
                 },
-                onOpenSettings = {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.fromParts("package", context.packageName, null)
-                    }
-                    context.startActivity(intent)
-                },
                 onEnableLocation = {
                     activity.enableLocationService()
                 },
@@ -216,7 +207,6 @@ fun HomeScreen(
 private fun PermissionWarningBanner(
     uiState: HomeUiState,
     onRequestBackgroundLocation: () -> Unit,
-    onOpenSettings: () -> Unit,
     onEnableLocation: () -> Unit,
     onRequestNotification: () -> Unit,
     onRequestLocation: () -> Unit
