@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -229,6 +230,7 @@ fun DebugScreen(
                         style = MaterialTheme.typography.bodyMedium.copy(
                             textDecoration = TextDecoration.Underline
                         ),
+                        fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -273,10 +275,11 @@ fun DebugScreen(
                                     textDecoration = TextDecoration.Underline
                                 )
                             ) {
-                                append("stephen.vaz")
+                                append("stephenvaz")
                             }
                         },
                         style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.clickable {
                             uriHandler.openUri("https://github.com/stephenvaz")
                         }
