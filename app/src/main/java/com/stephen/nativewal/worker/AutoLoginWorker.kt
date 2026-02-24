@@ -134,7 +134,7 @@ class AutoLoginWorker(
 
     /**
      * Quick connectivity probe over the bound WiFi network.
-     * Returns true when internet is already available (HTTP 204 or 200
+     * Returns true when internet is already available (HTTP 204
      * from Google's connectivity-check endpoint), meaning no captive
      * portal login is required.
      */
@@ -152,7 +152,9 @@ class AutoLoginWorker(
             connection.connect()
 
             val code = connection.responseCode
-            val reachable = code == 204 || code == 200
+            // generate_204 returns exactly 204 when internet is available.
+            // HTTP 200 could means a captive portal intercepted the request.
+            val reachable = code == 204
             dLog(TAG, "Pre-login connectivity check: HTTP $code → reachable=$reachable")
             reachable
         } catch (e: Exception) {
@@ -184,7 +186,8 @@ class AutoLoginWorker(
             connection.connect()
 
             val code = connection.responseCode
-            val success = code == 204 || code == 200
+            // Only 204 means real internet. 200 = captive portal intercept.
+            val success = code == 204
             dLog(TAG, "Validation HTTP $code — reporting connectivity: $success")
             cm.reportNetworkConnectivity(wifiNetwork, success)
             success
