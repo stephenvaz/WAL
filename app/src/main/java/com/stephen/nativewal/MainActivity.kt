@@ -1,6 +1,7 @@
 package com.stephen.nativewal
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -21,19 +22,41 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.LocationSettingsRequest
 import com.google.android.gms.location.Priority
+import com.stephen.nativewal.network.WifiLoginTrigger
+import com.stephen.nativewal.ui.navigation.Screen
 import com.stephen.nativewal.ui.navigation.WalNavHost
 import com.stephen.nativewal.ui.theme.WALTheme
+import kotlinx.coroutines.flow.MutableStateFlow
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 
 class MainActivity : ComponentActivity() {
 
-    private val handler = Handler(Looper.getMainLooper())
+    companion object {
+        const val ACTION_START_AUTO_LOGIN = "com.stephen.nativewal.action.START_AUTO_LOGIN"
+        const val EXTRA_AUTO_LOGIN_SSID = "extra_auto_login_ssid"
+    }
 
-    // ── Permission launchers (registered in onCreate, before STARTED) ──
+    private val handler = Handler(Looper.getMainLooper())
+    private val pendingNavigationRoute = MutableStateFlow<String?>(null)
+
+    // ── Permission launchers ──
 
     private lateinit var backgroundLocationLauncher: ActivityResultLauncher<String>
     private lateinit var locationLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var notificationLauncher: ActivityResultLauncher<String>
     private lateinit var locationSettingsLauncher: ActivityResultLauncher<IntentSenderRequest>
+
+    private fun handleLaunchIntent(intent: Intent?) {
+        val ssid = intent?.getStringExtra(EXTRA_AUTO_LOGIN_SSID)
+        if (ssid != null && ssid.trim().isNotEmpty() && intent.action == ACTION_START_AUTO_LOGIN) {
+            // Trigger the auto-login worker
+            WifiLoginTrigger.enqueueAutoLogin(this, ssid, source = "widget")
+            // Schedule navigation to the progress screen
+            pendingNavigationRoute.value = Screen.AutoLoginProgress.createRoute(ssid)
+        }
+    }
 
     /** Call from Compose to re-request location permission from the banner. */
     fun requestLocationPermission() {
@@ -72,34 +95,30 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleLaunchIntent(intent)
 
-        // Register launchers BEFORE setContent (must be before STARTED state)
         locationSettingsLauncher = registerForActivityResult(
             ActivityResultContracts.StartIntentSenderForResult()
         ) { result ->
             Log.d("PermissionFlow", "Location settings result: ${result.resultCode}")
-            // ON_RESUME lifecycle observer will refresh the banner
         }
 
         backgroundLocationLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
             Log.d("PermissionFlow", "Background location result: $granted")
-            // Done — the ON_RESUME lifecycle observer in HomeScreen will refresh state
         }
 
         locationLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { grants ->
             val fineGranted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true
-            Log.d("PermissionFlow", "Location result: fine=$fineGranted")
             if (fineGranted) {
                 val hasBackground = ContextCompat.checkSelfPermission(
                     this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
                 ) == PackageManager.PERMISSION_GRANTED
                 if (!hasBackground) {
                     handler.postDelayed({
-                        Log.d("PermissionFlow", "Launching background location request")
                         backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                     }, 800)
                 }
@@ -109,28 +128,15 @@ class MainActivity : ComponentActivity() {
         notificationLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-            Log.d("PermissionFlow", "Notification result: $granted")
             val needsLocation = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.ACCESS_FINE_LOCATION
             ) != PackageManager.PERMISSION_GRANTED
             if (needsLocation) {
                 handler.postDelayed({
-                    Log.d("PermissionFlow", "Launching location request")
                     locationLauncher.launch(
                         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
                     )
                 }, 200)
-            } else {
-                // Foreground already granted, chain to background
-                val hasBackground = ContextCompat.checkSelfPermission(
-                    this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
-                if (!hasBackground) {
-                    handler.postDelayed({
-                        Log.d("PermissionFlow", "Launching background location request (skip location)")
-                        backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                    }, 500)
-                }
             }
         }
 
@@ -139,12 +145,28 @@ class MainActivity : ComponentActivity() {
             WALTheme {
                 Surface {
                     val navController = rememberNavController()
+                    val navigationRoute by pendingNavigationRoute.collectAsState()
+
+                    LaunchedEffect(navigationRoute) {
+                        navigationRoute?.let { route ->
+                            navController.navigate(route) {
+                                // If we are already on a progress screen, or coming from Home,
+                                // ensure we don't stack multiple progress screens.
+                                if (route.contains("auto_login_progress")) {
+                                    popUpTo(Screen.Home.route) { inclusive = false }
+                                }
+                                launchSingleTop = true
+                            }
+                            // Clear the pending route so we don't navigate again on recomposition
+                            pendingNavigationRoute.value = null
+                        }
+                    }
+
                     WalNavHost(navController = navController)
                 }
             }
         }
 
-        // Kick off the permission chain after the Activity is fully created
         startPermissionChain()
     }
 
@@ -157,18 +179,17 @@ class MainActivity : ComponentActivity() {
             this, Manifest.permission.ACCESS_FINE_LOCATION
         ) != PackageManager.PERMISSION_GRANTED
 
-        val needsBackground = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
-        ) != PackageManager.PERMISSION_GRANTED
-
-        Log.d("PermissionFlow", "Start chain: notification=$needsNotification, location=$needsLocation, background=$needsBackground")
-
         when {
             needsNotification -> notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             needsLocation -> locationLauncher.launch(
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
             )
-            needsBackground -> backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
     }
 }

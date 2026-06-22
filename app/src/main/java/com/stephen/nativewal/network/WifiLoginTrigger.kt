@@ -8,6 +8,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.stephen.nativewal.util.dLog
 import com.stephen.nativewal.worker.AutoLoginWorker
+import java.util.UUID
 
 /**
  * Shared logic for reading the current WiFi SSID and enqueuing
@@ -25,22 +26,34 @@ object WifiLoginTrigger {
             .getSystemService(Context.WIFI_SERVICE) as WifiManager
         val connectionInfo = wifiManager.connectionInfo
         val rawSsid = connectionInfo?.ssid ?: "<unknown ssid>"
-        val ssid = rawSsid.removeSurrounding("\"")
+        val ssid = if (rawSsid.length >= 2 && rawSsid.first() == '"' && rawSsid.last() == '"') {
+            rawSsid.substring(1, rawSsid.length - 1)
+        } else {
+            rawSsid
+        }
 
-        if (ssid == "<unknown ssid>" || ssid.isBlank()) {
+        if (ssid == "<unknown ssid>" || ssid.trim().isEmpty()) {
             dLog(TAG, "[$source] SSID unknown or blank, ignoring.")
             return
         }
 
         dLog(TAG, "[$source] WiFi available: $ssid")
+        enqueueAutoLogin(context, ssid, source)
+    }
+
+    fun enqueueAutoLogin(context: Context, ssid: String, source: String = "manual") {
+        val sessionId = UUID.randomUUID().toString()
 
         val inputData = Data.Builder()
             .putString(AutoLoginWorker.KEY_SSID, ssid)
+            .putString(AutoLoginWorker.KEY_SESSION_ID, sessionId)
+            .putString(AutoLoginWorker.KEY_TRIGGER_SOURCE, source)
             .build()
 
         val workRequest = OneTimeWorkRequestBuilder<AutoLoginWorker>()
             .setInputData(inputData)
             .addTag("auto_login_$ssid")
+            .addTag("auto_login_session_$sessionId")
             .build()
 
         // Use REPLACE so that a stale worker (e.g. from an onLost event)

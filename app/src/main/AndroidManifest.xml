@@ -40,13 +40,31 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.WAL">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".widget.AutoLoginWidgetConfigureActivity"
+            android:exported="true"
+            android:theme="@style/Theme.WAL" />
+
+        <receiver
+            android:name=".widget.AutoLoginWidgetProvider"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/autologin_widget_info" />
+        </receiver>
 
         <!-- Foreground service: keeps a WiFi NetworkCallback alive -->
         <service

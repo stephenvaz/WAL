@@ -7,4 +7,9 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Material 3ish colors for Widget -->
+    <color name="widget_background">#202124</color>
+    <color name="widget_text_primary">#E8EAED</color>
+    <color name="widget_text_secondary">#9AA0A6</color>
 </resources>

@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.webkit.SslErrorHandler
@@ -14,9 +16,13 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.app.NotificationCompat
+import androidx.core.location.LocationManagerCompat
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.stephen.nativewal.R
+import com.stephen.nativewal.data.model.AutoLoginStep
 import com.stephen.nativewal.data.model.FormAction
 import com.stephen.nativewal.data.model.FormActionType
 import com.stephen.nativewal.data.model.WifiConfig
@@ -26,8 +32,12 @@ import com.stephen.nativewal.util.dLog
 import com.stephen.nativewal.util.dLogError
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers.IO
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -39,6 +49,12 @@ class AutoLoginWorker(
 
     companion object {
         const val KEY_SSID = "ssid"
+        const val KEY_SESSION_ID = "session_id"
+        const val KEY_TRIGGER_SOURCE = "trigger_source"
+        const val KEY_PROGRESS_STEP = "progress_step"
+        const val KEY_PROGRESS_MESSAGE = "progress_message"
+        const val KEY_PROGRESS_ERROR = "progress_error"
+        const val KEY_IS_LOCATION_ERROR = "is_location_error"
         private const val TAG = "AutoLoginWorker"
         private const val NOTIFICATION_CHANNEL_ID = "auto_login_result"
         private const val NOTIFICATION_CHANNEL_NAME = "AutoLogin Results"
@@ -46,84 +62,155 @@ class AutoLoginWorker(
 
     private val repository = WifiConfigRepository(appContext)
     private val settingsRepository = SettingsRepository(appContext)
+    private val progressScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override suspend fun doWork(): Result {
         val ssid = inputData.getString(KEY_SSID)
-        if (ssid.isNullOrBlank()) {
-            dLog(TAG, "No SSID provided, aborting.")
-            return Result.failure()
-        }
+        val sessionId: String = inputData.getString(KEY_SESSION_ID) ?: UUID.randomUUID().toString()
+        val triggerSource = inputData.getString(KEY_TRIGGER_SOURCE) ?: "unknown"
 
-        dLog(TAG, "Worker started for SSID: $ssid")
+        try {
+            // --- Step 1: Request Received ---
+            val step1 = AutoLoginStep.REQUEST_RECEIVED
+            publishProgress(sessionId, step1.name, "Received auto-login request")
 
-        val config = repository.getConfig(ssid)
-        if (config == null) {
-            dLog(TAG, "No config found for SSID: $ssid")
-            return Result.success()
-        }
+            if (ssid.isNullOrBlank()) {
+                val err = "Target SSID is missing."
+                val data = createErrorData(sessionId, step1.name, "Request failed", err)
+                publishProgress(sessionId, step1.name, "Request failed", err)
+                return Result.failure(data)
+            }
 
-        if (!config.isEnabled) {
-            dLog(TAG, "Config disabled for SSID: $ssid")
-            return Result.success()
-        }
+            // --- Step 2: Checking Config ---
+            val step2 = AutoLoginStep.CHECKING_CONFIG
+            publishProgress(sessionId, step2.name, "Looking up actions for $ssid")
 
-        val bound = bindProcessToWifi()
-        if (!bound) {
-            dLogError(TAG, "Could not bind to WiFi network")
-            showNotification(ssid, success = false, message = "Could not bind to WiFi network")
-            return Result.failure()
-        }
+            val config = repository.getConfig(ssid)
+            if (config == null) {
+                val err = "No saved actions found for $ssid."
+                val data = createErrorData(sessionId, step2.name, "Config not found", err)
+                publishProgress(sessionId, step2.name, "Config not found", err)
+                return Result.failure(data)
+            }
 
-        // ── Pre-login connectivity check ──────────────────────────────
-        // If the setting is enabled, probe the network first. When
-        // internet is already reachable (HTTP 204), the captive portal
-        // has already been resolved — skip the WebView login entirely.
-        val skipLogin = settingsRepository.getBoolean(
-            SettingsRepository.KEY_CONNECTIVITY_CHECK, default = false
-        ) && isInternetReachable()
+            if (!config.isEnabled) {
+                val err = "Auto-login is disabled for $ssid."
+                val data = createErrorData(sessionId, step2.name, "Disabled", err)
+                publishProgress(sessionId, step2.name, "Disabled", err)
+                return Result.failure(data)
+            }
 
-        if (skipLogin) {
-            dLog(TAG, "Internet already reachable on $ssid — skipping portal login.")
-            val validated = validateWifiNetwork()
-            dLog(TAG, "Portal validation (pre-connected): $validated")
+            // --- Step 3: Verifying SSID ---
+            val step3 = AutoLoginStep.VERIFYING_SSID
+            publishProgress(sessionId, step3.name, "Checking current WiFi connection")
+
+            if (!isLocationEnabled()) {
+                val err = "Location is OFF. Android requires location to identify WiFi networks."
+                val data = createErrorData(sessionId, step3.name, "Location disabled", err, isLocationError = true)
+                publishProgress(sessionId, step3.name, "Location disabled", err, isLocationError = true)
+                return Result.failure(data)
+            }
+
+            val currentSsid = getCurrentWifiSsid()
+            if (currentSsid != ssid) {
+                val err = "Currently connected to: ${currentSsid ?: "none"}. Please connect to $ssid first."
+                val data = createErrorData(sessionId, step3.name, "Wrong connection", err)
+                publishProgress(sessionId, step3.name, "Wrong connection", err)
+                return Result.failure(data)
+            }
+
+            // Check if internet is already reachable on this SSID (Early check)
+            val connectivityVerificationEnabled = settingsRepository.getBoolean(SettingsRepository.KEY_CONNECTIVITY_CHECK, false)
+            if (connectivityVerificationEnabled && isInternetReachable()) {
+                val msg = "Already connected to the internet on $ssid."
+                publishProgress(sessionId, AutoLoginStep.COMPLETED.name, msg)
+                showNotification(ssid, true, "Already connected on $ssid.")
+                return Result.success(workDataOf(
+                    KEY_SESSION_ID to sessionId,
+                    KEY_PROGRESS_STEP to AutoLoginStep.COMPLETED.name,
+                    KEY_PROGRESS_MESSAGE to msg
+                ))
+            }
+
+            // --- Step 4: Binding Network ---
+            val step4 = AutoLoginStep.BINDING_WIFI_NETWORK
+            publishProgress(sessionId, step4.name, "Latching to the WiFi network")
+            val bound = bindProcessToWifi()
+            if (!bound) {
+                val err = "System failed to route traffic through WiFi."
+                val data = createErrorData(sessionId, step4.name, "Routing failed", err)
+                publishProgress(sessionId, step4.name, "Routing failed", err)
+                return Result.failure(data)
+            }
+
+            // Post-bind connectivity probe: ONLY skip if verification is enabled AND probe succeeds
+            if (connectivityVerificationEnabled && isInternetReachable()) {
+                val stepValidated = AutoLoginStep.VALIDATING_CONNECTION
+                publishProgress(sessionId, stepValidated.name, "Verifying internet access...")
+                val validated = validateWifiNetwork()
+                if (validated) {
+                    publishProgress(sessionId, AutoLoginStep.COMPLETED.name, "Logged in successfully")
+                    showNotification(ssid, true, "Already connected to internet.")
+                    return Result.success()
+                } else {
+                    val err = "Connected but internet probe failed."
+                    val data = createErrorData(sessionId, stepValidated.name, "Probe failed", err)
+                    publishProgress(sessionId, stepValidated.name, "Probe failed", err)
+                    return Result.failure(data)
+                }
+            }
+
+            // --- Step 5: Loading Page & Automating ---
+            val step5 = AutoLoginStep.LOADING_WEBPAGE
+            publishProgress(sessionId, step5.name, "Loading captive portal page")
+            val loginSuccess = performWebViewLogin(config, sessionId)
+
+            // --- Step 6: Final Validating ---
+            val step6 = AutoLoginStep.VALIDATING_CONNECTION
+            var validated = false
+            if (loginSuccess) {
+                publishProgress(sessionId, step6.name, "Checking if login succeeded")
+                validated = validateWifiNetwork()
+            }
+
+            if (loginSuccess && validated) {
+                publishProgress(sessionId, AutoLoginStep.COMPLETED.name, "Successfully logged in")
+                showNotification(ssid, true)
+                return Result.success()
+            } else {
+                val failedStep = if (!loginSuccess) step5 else step6
+                val err = if (!loginSuccess) "Portal page failed to load or actions timed out." else "Portal did not grant internet access after login."
+                val data = createErrorData(sessionId, failedStep.name, "Login failed", err)
+                publishProgress(sessionId, failedStep.name, "Login failed", err)
+                showNotification(ssid, false)
+                return Result.failure(data)
+            }
+        } finally {
             unbindProcess()
-            showNotification(ssid, success = true, message = "Internet Already Reachable on $ssid | Skipping Login")
-            return Result.success()
         }
-
-        val success = performWebViewLogin(config)
-
-        // Trigger captive portal validation before unbinding
-        var validated = false
-        if (success) {
-            validated = validateWifiNetwork()
-            dLog(TAG, "Portal validation: $validated")
-        }
-
-        unbindProcess()
-
-        val finalSuccess = success && validated
-        showNotification(ssid, finalSuccess)
-
-        return if (finalSuccess) Result.success() else Result.retry()
     }
 
-    /**
-     * Find the WiFi [Network] from all available networks.
-     * Unlike cm.activeNetwork, this works even when mobile data is the default route.
-     */
-    @Suppress("DEPRECATION") // No non-deprecated replacement for enumerating all networks
-    private fun findWifiNetwork(): android.net.Network? {
-        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        return cm.allNetworks.firstOrNull { network ->
-            val caps = cm.getNetworkCapabilities(network)
-            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-        }
+    private fun isLocationEnabled(): Boolean {
+        val lm = applicationContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        return LocationManagerCompat.isLocationEnabled(lm)
+    }
+
+    private fun createErrorData(sessionId: String, step: String, message: String, error: String, isLocationError: Boolean = false): Data {
+        return workDataOf(
+            KEY_SESSION_ID to sessionId,
+            KEY_PROGRESS_STEP to step,
+            KEY_PROGRESS_MESSAGE to message,
+            KEY_PROGRESS_ERROR to error,
+            KEY_IS_LOCATION_ERROR to isLocationError
+        )
     }
 
     private fun bindProcessToWifi(): Boolean {
-        val wifiNetwork = findWifiNetwork() ?: return false
         val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val wifiNetwork = cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        } ?: return false
         return cm.bindProcessToNetwork(wifiNetwork)
     }
 
@@ -132,67 +219,65 @@ class AutoLoginWorker(
         cm.bindProcessToNetwork(null)
     }
 
-    /**
-     * Quick connectivity probe over the bound WiFi network.
-     * Returns true when internet is already available (HTTP 204
-     * from Google's connectivity-check endpoint), meaning no captive
-     * portal login is required.
-     */
-    private suspend fun isInternetReachable(): Boolean = withContext(IO) {
-        val wifiNetwork = findWifiNetwork() ?: return@withContext false
+    @Suppress("DEPRECATION")
+    private fun getCurrentWifiSsid(): String? {
+        return try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val connectionInfo = wifiManager.connectionInfo
+            val rawSsid = connectionInfo?.ssid ?: return null
+            if (rawSsid == "<unknown ssid>" || rawSsid == "none") return null
+            if (rawSsid.length >= 2 && rawSsid.first() == '"' && rawSsid.last() == '"') {
+                rawSsid.substring(1, rawSsid.length - 1)
+            } else {
+                rawSsid
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-        val checkUrl = "http://connectivitycheck.gstatic.com/generate_204"
+    private suspend fun isInternetReachable(): Boolean = withContext(IO) {
+        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val wifiNetwork = cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        } ?: return@withContext false
+
         var connection: HttpURLConnection? = null
         try {
-            connection = wifiNetwork.openConnection(URL(checkUrl)) as HttpURLConnection
+            connection = wifiNetwork.openConnection(URL("http://connectivitycheck.gstatic.com/generate_204")) as HttpURLConnection
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 5000
             connection.readTimeout = 5000
             connection.useCaches = false
             connection.connect()
-
-            val code = connection.responseCode
-            // generate_204 returns exactly 204 when internet is available.
-            // HTTP 200 could means a captive portal intercepted the request.
-            val reachable = code == 204
-            dLog(TAG, "Pre-login connectivity check: HTTP $code → reachable=$reachable")
-            reachable
+            connection.responseCode == 204
         } catch (e: Exception) {
-            dLog(TAG, "Pre-login connectivity check failed: ${e.message}")
             false
         } finally {
             try { connection?.disconnect() } catch (_: Exception) {}
         }
     }
 
-    /**
-     * Hits Google's connectivity check endpoint through the WiFi network.
-     * Then calls reportNetworkConnectivity() to tell Android the captive portal
-     * is resolved — this clears the "Sign in to Wi-Fi" notification and
-     * switches the default route back to WiFi.
-     */
     private suspend fun validateWifiNetwork(): Boolean = withContext(IO) {
         val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val wifiNetwork = findWifiNetwork() ?: return@withContext false
+        val wifiNetwork = cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        } ?: return@withContext false
 
-        val checkUrl = "http://connectivitycheck.gstatic.com/generate_204"
         var connection: HttpURLConnection? = null
         try {
-            connection = wifiNetwork.openConnection(URL(checkUrl)) as HttpURLConnection
+            connection = wifiNetwork.openConnection(URL("http://connectivitycheck.gstatic.com/generate_204")) as HttpURLConnection
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 5000
             connection.readTimeout = 5000
             connection.useCaches = false
             connection.connect()
-
-            val code = connection.responseCode
-            // Only 204 means real internet. 200 = captive portal intercept.
-            val success = code == 204
-            dLog(TAG, "Validation HTTP $code — reporting connectivity: $success")
+            val success = connection.responseCode == 204
             cm.reportNetworkConnectivity(wifiNetwork, success)
             success
         } catch (e: Exception) {
-            dLogError(TAG, "Validation failed", e)
             try { cm.reportNetworkConnectivity(wifiNetwork, false) } catch (_: Exception) {}
             false
         } finally {
@@ -201,15 +286,11 @@ class AutoLoginWorker(
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private suspend fun performWebViewLogin(config: WifiConfig): Boolean {
+    private suspend fun performWebViewLogin(config: WifiConfig, sessionId: String): Boolean {
         val result = CompletableDeferred<Boolean>()
         var hasInjected = false
-        var hasCriticalError = false
         var webView: WebView? = null
         val mainHandler = Handler(Looper.getMainLooper())
-        var completionRunnable: Runnable? = null
-
-        val totalTimeoutMs = (config.timeoutInSeconds * 3000).toLong().coerceAtLeast(15000L)
         val cleanupDelayMs = (config.timeoutInSeconds * 1000).toLong()
 
         try {
@@ -222,170 +303,75 @@ class AutoLoginWorker(
                     settings.userAgentString = "WAL-AutoLogin/1.0"
 
                     webViewClient = object : WebViewClient() {
-
-                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                            dLog(TAG, "Page loading: $url")
-                        }
-
                         override fun onPageFinished(view: WebView?, url: String?) {
-                            dLog(TAG, "Page loaded: $url")
+                            dLog(TAG, "WebView finished loading: $url")
+                            if (hasInjected) return
 
-                            // If we hit a critical error (DNS, connection refused, etc.)
-                            // don't bother injecting into the error page.
-                            if (hasCriticalError) {
-                                dLog(TAG, "Skipping injection — critical error occurred.")
-                                return
-                            }
-
-                            // Log page content before injection
-                            view?.evaluateJavascript("document.body.innerText") { rawContent ->
-                                val content = rawContent
-                                    ?.removeSurrounding("\"")
-                                    ?.replace("\\n", "\n")
-                                    ?.replace("\\t", "\t")
-                                    ?: "(empty)"
-                                val label = if (hasInjected) "After Injection" else "Before Injection"
-                                dLog(TAG, "PAGE CONTENT ($label):\n$content")
-                            }
-
-                            if (hasInjected) {
-                                dLog(TAG, "Post-injection navigation to: $url — restarting completion timer.")
-                                completionRunnable?.let { mainHandler.removeCallbacks(it) }
-                                val postRunnable = Runnable {
-                                    if (!result.isCompleted) {
-                                        result.complete(true)
-                                    }
-                                }
-                                completionRunnable = postRunnable
-                                mainHandler.postDelayed(postRunnable, cleanupDelayMs)
-                                return
+                            progressScope.launch {
+                                publishProgress(sessionId, AutoLoginStep.APPLYING_ACTIONS.name, "Applying saved web actions")
                             }
 
                             hasInjected = true
                             val jsCode = generateJsFromActions(config.actions)
-                            dLog(TAG, "Executing JS:\n$jsCode")
                             view?.evaluateJavascript(jsCode) { _ ->
-                                dLog(TAG, "JS injection complete. Waiting ${cleanupDelayMs}ms.")
-                                completionRunnable?.let { mainHandler.removeCallbacks(it) }
-                                val jsRunnable = Runnable {
-                                    if (!result.isCompleted) {
-                                        result.complete(true)
-                                    }
-                                }
-                                completionRunnable = jsRunnable
-                                mainHandler.postDelayed(jsRunnable, cleanupDelayMs)
+                                dLog(TAG, "JS Injection complete. Waiting ${cleanupDelayMs}ms.")
+                                mainHandler.postDelayed({
+                                    if (!result.isCompleted) result.complete(true)
+                                }, cleanupDelayMs)
                             }
                         }
 
-                        @Suppress("OVERRIDE_DEPRECATION")
-                        override fun onReceivedError(
-                            view: WebView?,
-                            errorCode: Int,
-                            description: String?,
-                            failingUrl: String?
-                        ) {
-                            dLogError(TAG, "WebView error: $errorCode - $description")
-                            // Fail on critical errors (DNS, connection refused, timeout, etc.)
-                            // Error codes: -2 = NAME_NOT_RESOLVED, -6 = CONNECTION_REFUSED,
-                            //              -8 = TIMEOUT, -1 = GENERIC
-                            if (errorCode <= -1) {
-                                hasCriticalError = true
-                                completionRunnable?.let { mainHandler.removeCallbacks(it) }
-                                if (!result.isCompleted) {
-                                    result.complete(false)
-                                }
+                        override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                            dLogError(TAG, "WebView error: $errorCode - $description ($failingUrl)")
+                            if (errorCode <= -1 && !result.isCompleted) {
+                                result.complete(false)
                             }
                         }
 
                         @SuppressLint("WebViewClientOnReceivedSslError")
-                        override fun onReceivedSslError(
-                            view: WebView?,
-                            handler: SslErrorHandler?,
-                            error: android.net.http.SslError?
-                        ) {
+                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
                             handler?.proceed()
                         }
                     }
-
+                    dLog(TAG, "Loading URL: ${config.url}")
                     loadUrl(config.url)
                 }
             }
-
-            val success = withTimeoutOrNull(totalTimeoutMs) {
+            return withTimeoutOrNull((config.timeoutInSeconds * 3000).toLong().coerceAtLeast(20000L)) {
                 result.await()
             } ?: false
-
-            withContext(Dispatchers.Main) {
-                webView?.apply {
-                    stopLoading()
-                    clearHistory()
-                    clearCache(true)
-                    destroy()
-                }
-                webView = null
-            }
-
-            return success
         } catch (e: Exception) {
             dLogError(TAG, "WebView login failed", e)
+            return false
+        } finally {
             withContext(Dispatchers.Main) {
+                webView?.stopLoading()
                 webView?.destroy()
             }
-            return false
         }
     }
 
     private fun generateJsFromActions(actions: List<FormAction>): String {
-        val sb = StringBuilder()
-        sb.appendLine("try {")
-
-        val sorted = actions.sortedBy { it.order }
-        for (action in sorted) {
+        val sb = StringBuilder().appendLine("try {")
+        for (action in actions.sortedBy { it.order }) {
             val selector = action.selector.replace("'", "\\'")
-            when (action.type) {
-                FormActionType.setValue -> {
-                    val value = (action.value ?: "").replace("'", "\\'")
-                    sb.appendLine("  var elem_${action.order} = document.querySelector('$selector');")
-                    sb.appendLine("  if (elem_${action.order}) {")
-                    sb.appendLine("    elem_${action.order}.value = '$value';")
-                    sb.appendLine("    elem_${action.order}.dispatchEvent(new Event('input', { bubbles: true }));")
-                    sb.appendLine("  }")
-                }
-                FormActionType.click -> {
-                    sb.appendLine("  var btn_${action.order} = document.querySelector('$selector');")
-                    sb.appendLine("  if (btn_${action.order}) {")
-                    sb.appendLine("    btn_${action.order}.disabled = false;")
-                    sb.appendLine("    btn_${action.order}.click();")
-                    sb.appendLine("  }")
-                }
+            if (action.type == FormActionType.setValue) {
+                val value = (action.value ?: "").replace("'", "\\'")
+                sb.appendLine("  var e${action.order}=document.querySelector('$selector'); if(e${action.order}){e${action.order}.value='$value'; e${action.order}.dispatchEvent(new Event('input',{bubbles:true}));}")
+            } else {
+                sb.appendLine("  var b${action.order}=document.querySelector('$selector'); if(b${action.order}){b${action.order}.disabled=false; b${action.order}.click();}")
             }
         }
-
-        sb.appendLine("} catch(e) { console.log('AutoLogin Error:', e); }")
-        return sb.toString()
+        return sb.appendLine("} catch(e) {}").toString()
     }
 
     private fun showNotification(ssid: String, success: Boolean, message: String? = null) {
         val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID,
-            NOTIFICATION_CHANNEL_NAME,
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Success/failure notifications for WiFi login attempts"
-        }
+        val channel = NotificationChannel(NOTIFICATION_CHANNEL_ID, NOTIFICATION_CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH)
         nm.createNotificationChannel(channel)
-
         val title = if (success) "WiFi Login Success" else "WiFi Login Failed"
-        val body = message ?: if (success) {
-            "Connected on $ssid."
-        } else {
-            "Unable to login on $ssid."
-        }
-
+        val body = message ?: if (success) "Connected on $ssid." else "Unable to login on $ssid."
         val appIcon = android.graphics.BitmapFactory.decodeResource(applicationContext.resources, R.mipmap.ic_launcher)
-
         val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setLargeIcon(appIcon)
@@ -394,7 +380,10 @@ class AutoLoginWorker(
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .build()
-
         nm.notify(ssid.hashCode() and 0x7fffffff, notification)
+    }
+
+    private suspend fun publishProgress(sessionId: String, step: String, message: String, error: String? = null, isLocationError: Boolean = false) {
+        setProgress(workDataOf(KEY_SESSION_ID to sessionId, KEY_PROGRESS_STEP to step, KEY_PROGRESS_MESSAGE to message, KEY_PROGRESS_ERROR to error, KEY_IS_LOCATION_ERROR to isLocationError))
     }
 }

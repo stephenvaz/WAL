@@ -7,6 +7,9 @@ sealed class Screen(val route: String) {
             return if (ssid != null) "config_editor?ssid=$ssid" else "config_editor"
         }
     }
+    data object AutoLoginProgress : Screen("auto_login_progress?ssid={ssid}") {
+        fun createRoute(ssid: String): String = "auto_login_progress?ssid=$ssid"
+    }
     data object Debug : Screen("debug")
     data object DebugLogs : Screen("debug_logs")
 }
