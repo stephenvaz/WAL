@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
-import android.graphics.Bitmap
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -41,6 +40,7 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration.Companion.milliseconds
 
 class AutoLoginWorker(
     appContext: Context,
@@ -62,12 +62,11 @@ class AutoLoginWorker(
 
     private val repository = WifiConfigRepository(appContext)
     private val settingsRepository = SettingsRepository(appContext)
-    private val progressScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val progressScope = CoroutineScope(SupervisorJob() + IO)
 
     override suspend fun doWork(): Result {
         val ssid = inputData.getString(KEY_SSID)
         val sessionId: String = inputData.getString(KEY_SESSION_ID) ?: UUID.randomUUID().toString()
-        val triggerSource = inputData.getString(KEY_TRIGGER_SOURCE) ?: "unknown"
 
         try {
             // --- Step 1: Request Received ---
@@ -289,8 +288,10 @@ class AutoLoginWorker(
     private suspend fun performWebViewLogin(config: WifiConfig, sessionId: String): Boolean {
         val result = CompletableDeferred<Boolean>()
         var hasInjected = false
+        var hasCriticalError = false
         var webView: WebView? = null
         val mainHandler = Handler(Looper.getMainLooper())
+        var completionRunnable: Runnable? = null
         val cleanupDelayMs = (config.timeoutInSeconds * 1000).toLong()
 
         try {
@@ -305,7 +306,24 @@ class AutoLoginWorker(
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {
                             dLog(TAG, "WebView finished loading: $url")
-                            if (hasInjected) return
+
+                            if (hasCriticalError) {
+                                dLog(TAG, "Skipping injection — critical error occurred.")
+                                return
+                            }
+
+                            if (hasInjected) {
+                                dLog(TAG, "Post-injection navigation to: $url — restarting completion timer.")
+                                completionRunnable?.let { mainHandler.removeCallbacks(it) }
+                                val postRunnable = Runnable {
+                                    if (!result.isCompleted) {
+                                        result.complete(true)
+                                    }
+                                }
+                                completionRunnable = postRunnable
+                                mainHandler.postDelayed(postRunnable, cleanupDelayMs)
+                                return
+                            }
 
                             progressScope.launch {
                                 publishProgress(sessionId, AutoLoginStep.APPLYING_ACTIONS.name, "Applying saved web actions")
@@ -315,16 +333,26 @@ class AutoLoginWorker(
                             val jsCode = generateJsFromActions(config.actions)
                             view?.evaluateJavascript(jsCode) { _ ->
                                 dLog(TAG, "JS Injection complete. Waiting ${cleanupDelayMs}ms.")
-                                mainHandler.postDelayed({
-                                    if (!result.isCompleted) result.complete(true)
-                                }, cleanupDelayMs)
+                                completionRunnable?.let { mainHandler.removeCallbacks(it) }
+                                val jsRunnable = Runnable {
+                                    if (!result.isCompleted) {
+                                        result.complete(true)
+                                    }
+                                }
+                                completionRunnable = jsRunnable
+                                mainHandler.postDelayed(jsRunnable, cleanupDelayMs)
                             }
                         }
 
+                        @Deprecated("Deprecated in Java")
                         override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
                             dLogError(TAG, "WebView error: $errorCode - $description ($failingUrl)")
-                            if (errorCode <= -1 && !result.isCompleted) {
-                                result.complete(false)
+                            if (errorCode <= -1) {
+                                hasCriticalError = true
+                                completionRunnable?.let { mainHandler.removeCallbacks(it) }
+                                if (!result.isCompleted) {
+                                    result.complete(false)
+                                }
                             }
                         }
 
@@ -337,7 +365,7 @@ class AutoLoginWorker(
                     loadUrl(config.url)
                 }
             }
-            return withTimeoutOrNull((config.timeoutInSeconds * 3000).toLong().coerceAtLeast(20000L)) {
+            return withTimeoutOrNull((config.timeoutInSeconds * 3000).toLong().coerceAtLeast(20000L).milliseconds) {
                 result.await()
             } ?: false
         } catch (e: Exception) {
@@ -345,8 +373,13 @@ class AutoLoginWorker(
             return false
         } finally {
             withContext(Dispatchers.Main) {
-                webView?.stopLoading()
-                webView?.destroy()
+                webView?.apply {
+                    stopLoading()
+                    clearHistory()
+                    clearCache(true)
+                    destroy()
+                }
+                webView = null
             }
         }
     }
