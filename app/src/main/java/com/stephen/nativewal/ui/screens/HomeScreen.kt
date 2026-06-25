@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationDisabled
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.NotificationsOff
@@ -177,6 +178,9 @@ fun HomeScreen(
                 },
                 onRequestLocation = {
                     activity.requestLocationPermission()
+                },
+                onDismissBackgroundLocation = {
+                    viewModel.dismissBackgroundLocationBanner()
                 }
             )
 
@@ -209,9 +213,19 @@ private fun PermissionWarningBanner(
     onRequestBackgroundLocation: () -> Unit,
     onEnableLocation: () -> Unit,
     onRequestNotification: () -> Unit,
-    onRequestLocation: () -> Unit
+    onRequestLocation: () -> Unit,
+    onDismissBackgroundLocation: () -> Unit
 ) {
-    data class Warning(val text: String, val icon: @Composable () -> Unit, val action: () -> Unit)
+    data class Warning(
+        val text: String,
+        val icon: @Composable () -> Unit,
+        val action: () -> Unit,
+        val isDismissible: Boolean = false,
+        val onDismiss: () -> Unit = {}
+    )
+
+    val showBackgroundLocationWarning = !uiState.isBackgroundLocationGranted &&
+            !uiState.isBackgroundLocationBannerDismissed
 
     val warning: Warning? = when {
         !uiState.isNotificationGranted -> Warning(
@@ -224,10 +238,12 @@ private fun PermissionWarningBanner(
             { Icon(Icons.Default.LocationOff, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer) },
             onRequestLocation
         )
-        !uiState.isBackgroundLocationGranted -> Warning(
-            "Background location needed. Tap to select 'Allow all the time'.",
+        showBackgroundLocationWarning -> Warning(
+            "Background location needed for auto-login in background. Tap to grant.",
             { Icon(Icons.Default.LocationOff, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer) },
-            onRequestBackgroundLocation
+            onRequestBackgroundLocation,
+            isDismissible = true,
+            onDismiss = onDismissBackgroundLocation
         )
         !uiState.isLocationServiceEnabled -> Warning(
             "Location (GPS) is OFF. Tap to enable.",
@@ -254,6 +270,20 @@ private fun PermissionWarningBanner(
                 color = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.weight(1f)
             )
+            if (warning.isDismissible) {
+                Spacer(Modifier.width(8.dp))
+                IconButton(
+                    onClick = { warning.onDismiss() },
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
         }
     }
 }

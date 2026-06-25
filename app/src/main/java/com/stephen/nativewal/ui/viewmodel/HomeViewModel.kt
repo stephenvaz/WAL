@@ -26,7 +26,8 @@ data class HomeUiState(
     val isBackgroundLocationGranted: Boolean = true,
     val isNotificationGranted: Boolean = true,
     val isLocationServiceEnabled: Boolean = true,
-    val isNetworkMonitorRegistered: Boolean = false
+    val isNetworkMonitorRegistered: Boolean = false,
+    val isBackgroundLocationBannerDismissed: Boolean = false
 )
 
 class HomeViewModel(
@@ -42,6 +43,7 @@ class HomeViewModel(
         loadConfigs()
         checkPermissions()
         checkNetworkMonitorStatus()
+        loadBannerDismissState()
     }
 
     fun loadConfigs() {
@@ -91,6 +93,22 @@ class HomeViewModel(
         }
     }
 
+    private fun loadBannerDismissState() {
+        viewModelScope.launch {
+            val dismissed = settingsRepository.getBoolean(
+                SettingsRepository.KEY_BACKGROUND_LOCATION_BANNER_DISMISSED, false
+            )
+            _uiState.update { it.copy(isBackgroundLocationBannerDismissed = dismissed) }
+        }
+    }
+
+    fun dismissBackgroundLocationBanner() {
+        viewModelScope.launch {
+            settingsRepository.setBoolean(SettingsRepository.KEY_BACKGROUND_LOCATION_BANNER_DISMISSED, true)
+            _uiState.update { it.copy(isBackgroundLocationBannerDismissed = true) }
+        }
+    }
+
     private fun checkNetworkMonitorStatus() {
         viewModelScope.launch {
             val registered = settingsRepository.getBoolean(
@@ -106,6 +124,15 @@ class HomeViewModel(
             NetworkMonitor.register(context)
             dLog("HomeViewModel", "WiFi monitor service started")
             _uiState.update { it.copy(isNetworkMonitorRegistered = true) }
+
+            // If background location is not granted, re-show the banner so user is prompted
+            val bgLocGranted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!bgLocGranted) {
+                settingsRepository.setBoolean(SettingsRepository.KEY_BACKGROUND_LOCATION_BANNER_DISMISSED, false)
+                _uiState.update { it.copy(isBackgroundLocationBannerDismissed = false) }
+            }
         }
     }
 

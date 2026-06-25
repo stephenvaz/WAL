@@ -112,22 +112,12 @@ class MainActivity : ComponentActivity() {
         locationLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { grants ->
-            val fineGranted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true
-            if (fineGranted) {
-                val hasBackground = ContextCompat.checkSelfPermission(
-                    this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
-                if (!hasBackground) {
-                    handler.postDelayed({
-                        backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                    }, 800)
-                }
-            }
+            Log.d("PermissionFlow", "Location result: $grants")
         }
 
         notificationLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission()
-        ) { granted ->
+        ) { _ ->
             val needsLocation = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.ACCESS_FINE_LOCATION
             ) != PackageManager.PERMISSION_GRANTED
