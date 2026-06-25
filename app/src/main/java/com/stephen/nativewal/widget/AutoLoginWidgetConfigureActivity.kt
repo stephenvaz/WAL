@@ -1,6 +1,5 @@
 package com.stephen.nativewal.widget
 
-import android.app.Activity
 import android.appwidget.AppWidgetManager
 import android.content.Intent
 import android.os.Bundle
@@ -42,7 +41,7 @@ class AutoLoginWidgetConfigureActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        setResult(Activity.RESULT_CANCELED)
+        setResult(RESULT_CANCELED)
 
         appWidgetId = intent?.extras?.getInt(
             AppWidgetManager.EXTRA_APPWIDGET_ID,
@@ -50,6 +49,20 @@ class AutoLoginWidgetConfigureActivity : ComponentActivity() {
         ) ?: AppWidgetManager.INVALID_APPWIDGET_ID
 
         if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+            finish()
+            return
+        }
+
+        val store = AutoLoginWidgetStore(this)
+        val pendingSsid = store.getPendingSsid()
+
+        if (pendingSsid != null && pendingSsid.isNotBlank()) {
+            store.clearPendingSsid()
+            store.saveWidgetSsid(appWidgetId, pendingSsid)
+            AutoLoginWidgetProvider.updateAllWidgets(this)
+
+            val resultValue = Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+            setResult(RESULT_OK, resultValue)
             finish()
             return
         }
@@ -64,7 +77,7 @@ class AutoLoginWidgetConfigureActivity : ComponentActivity() {
                             AutoLoginWidgetProvider.updateAllWidgets(this)
 
                             val resultValue = Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                            setResult(Activity.RESULT_OK, resultValue)
+                            setResult(RESULT_OK, resultValue)
                             finish()
                         },
                         onCancel = {

@@ -3,4 +3,5 @@
     <string name="autologin_widget_not_configured">WAL Auto Login</string>
     <string name="autologin_widget_tap_to_configure">Tap to choose an SSID</string>
     <string name="autologin_widget_tap_to_start">Tap to start auto login</string>
+    <string name="wifi_icon">WiFi Icon</string>
 </resources>

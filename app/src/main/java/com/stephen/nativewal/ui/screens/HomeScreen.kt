@@ -1,7 +1,10 @@
 package com.stephen.nativewal.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
@@ -199,7 +202,8 @@ fun HomeScreen(
                         configs = uiState.configs,
                         onEdit = onEditConfig,
                         onDelete = { viewModel.deleteConfig(it.ssid) },
-                        onToggle = { viewModel.toggleConfigEnabled(it) }
+                        onToggle = { viewModel.toggleConfigEnabled(it) },
+                        onAddWidget = { ssid -> viewModel.addWidgetForConfig(ssid) }
                     )
                 }
             }
@@ -288,15 +292,18 @@ private fun PermissionWarningBanner(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ConfigList(
     configs: List<WifiConfig>,
     onEdit: (String) -> Unit,
     onDelete: (WifiConfig) -> Unit,
-    onToggle: (WifiConfig) -> Unit
+    onToggle: (WifiConfig) -> Unit,
+    onAddWidget: (String) -> Boolean
 ) {
+    val context = LocalContext.current
     var configToDelete by remember { mutableStateOf<WifiConfig?>(null) }
+    var configForWidget by remember { mutableStateOf<WifiConfig?>(null) }
 
     configToDelete?.let { config ->
         AlertDialog(
@@ -311,6 +318,28 @@ private fun ConfigList(
             },
             dismissButton = {
                 TextButton(onClick = { configToDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    configForWidget?.let { config ->
+        AlertDialog(
+            onDismissRequest = { configForWidget = null },
+            title = { Text("Add Widget") },
+            text = { Text("Add a home screen widget for ${config.ssid}?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val pinned = onAddWidget(config.ssid)
+                    if (pinned) {
+                        Toast.makeText(context, "Widget added to home screen", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Long-press home screen > Widgets to add", Toast.LENGTH_LONG).show()
+                    }
+                    configForWidget = null
+                }) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { configForWidget = null }) { Text("Cancel") }
             }
         )
     }
@@ -367,7 +396,10 @@ private fun ConfigList(
                     colors = ListItemDefaults.colors(
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
-                    modifier = Modifier.clickable { onEdit(config.ssid) },
+                    modifier = Modifier.combinedClickable(
+                        onClick = { onEdit(config.ssid) },
+                        onLongClick = { configForWidget = config }
+                    ),
                     leadingContent = {
                         Icon(
                             Icons.Default.Wifi,

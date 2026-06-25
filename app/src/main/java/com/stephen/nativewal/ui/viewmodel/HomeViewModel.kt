@@ -1,9 +1,12 @@
 package com.stephen.nativewal.ui.viewmodel
 
 import android.Manifest
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -13,6 +16,8 @@ import com.stephen.nativewal.data.repository.SettingsRepository
 import com.stephen.nativewal.data.repository.WifiConfigRepository
 import com.stephen.nativewal.network.NetworkMonitor
 import com.stephen.nativewal.util.dLog
+import com.stephen.nativewal.widget.AutoLoginWidgetProvider
+import com.stephen.nativewal.widget.AutoLoginWidgetStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -143,6 +148,24 @@ class HomeViewModel(
             dLog("HomeViewModel", "WiFi monitor service stopped")
             _uiState.update { it.copy(isNetworkMonitorRegistered = false) }
         }
+    }
+
+    fun addWidgetForConfig(ssid: String): Boolean {
+        val store = AutoLoginWidgetStore(context)
+        store.savePendingSsid(ssid)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = AppWidgetManager.getInstance(context)
+            val provider = ComponentName(context, AutoLoginWidgetProvider::class.java)
+
+            if (manager.isRequestPinAppWidgetSupported) {
+                val success = manager.requestPinAppWidget(provider, null, null)
+                if (success) return true
+            }
+        }
+
+        store.clearPendingSsid()
+        return false
     }
 }
 

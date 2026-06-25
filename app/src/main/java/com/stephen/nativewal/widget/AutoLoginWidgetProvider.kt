@@ -37,7 +37,17 @@ class AutoLoginWidgetProvider : AppWidgetProvider() {
 
         fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
             val store = AutoLoginWidgetStore(context)
-            val ssid = store.getWidgetSsid(appWidgetId)
+            var ssid = store.getWidgetSsid(appWidgetId)
+
+            if (ssid == null) {
+                val pending = store.getPendingSsid()
+                if (pending != null && pending.isNotBlank()) {
+                    store.clearPendingSsid()
+                    store.saveWidgetSsid(appWidgetId, pending)
+                    ssid = pending
+                }
+            }
+
             val configuredSsid = ssid ?: ""
             val views = RemoteViews(context.packageName, R.layout.autologin_widget)
 
