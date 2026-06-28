@@ -8,5 +8,6 @@ data class WifiConfig(
     val url: String,
     val isEnabled: Boolean = true,
     val actions: List<FormAction> = emptyList(),
-    val timeoutInSeconds: Double = 10.0
+    val timeoutInSeconds: Double = 10.0,
+    val updatedAt: Long = System.currentTimeMillis()
 )

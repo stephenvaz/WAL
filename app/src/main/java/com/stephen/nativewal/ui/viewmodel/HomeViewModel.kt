@@ -15,6 +15,7 @@ import com.stephen.nativewal.data.model.WifiConfig
 import com.stephen.nativewal.data.repository.SettingsRepository
 import com.stephen.nativewal.data.repository.WifiConfigRepository
 import com.stephen.nativewal.network.NetworkMonitor
+import com.stephen.nativewal.shortcut.AppShortcutManager
 import com.stephen.nativewal.util.dLog
 import com.stephen.nativewal.widget.AutoLoginWidgetProvider
 import com.stephen.nativewal.widget.AutoLoginWidgetStore
@@ -55,7 +56,12 @@ class HomeViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             repository.getAllConfigsFlow().collect { configs ->
-                _uiState.update { it.copy(configs = configs, isLoading = false) }
+                _uiState.update {
+                    it.copy(
+                        configs = configs.sortedByDescending { c -> c.updatedAt },
+                        isLoading = false
+                    )
+                }
             }
         }
     }
@@ -63,6 +69,7 @@ class HomeViewModel(
     fun deleteConfig(ssid: String) {
         viewModelScope.launch {
             repository.deleteConfig(ssid)
+            AppShortcutManager(context).updateShortcuts()
         }
     }
 

@@ -8,6 +8,7 @@ import com.stephen.nativewal.data.model.FormAction
 import com.stephen.nativewal.data.model.FormActionType
 import com.stephen.nativewal.data.model.WifiConfig
 import com.stephen.nativewal.data.repository.WifiConfigRepository
+import com.stephen.nativewal.shortcut.AppShortcutManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +30,7 @@ data class ConfigEditorUiState(
 )
 
 class ConfigEditorViewModel(
+    private val context: Context,
     private val repository: WifiConfigRepository,
     private val editingSsid: String?
 ) : ViewModel() {
@@ -168,9 +170,11 @@ class ConfigEditorViewModel(
                 url = state.url.trim(),
                 isEnabled = state.isEnabled,
                 actions = state.actions,
-                timeoutInSeconds = timeout ?: 10.0
+                timeoutInSeconds = timeout ?: 10.0,
+                updatedAt = System.currentTimeMillis()
             )
             repository.saveConfig(config)
+            AppShortcutManager(context).updateShortcuts()
             _uiState.update { it.copy(isSaved = true) }
         }
         return true
@@ -183,6 +187,7 @@ class ConfigEditorViewModel(
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return ConfigEditorViewModel(
+                context = appContext,
                 repository = WifiConfigRepository(appContext),
                 editingSsid = editingSsid
             ) as T

@@ -19,6 +19,7 @@ class SettingsRepository(private val context: Context) {
         val KEY_CONNECTIVITY_CHECK = booleanPreferencesKey("connectivity_check_enabled")
         val KEY_NETWORK_MONITOR_REGISTERED = booleanPreferencesKey("network_monitor_registered")
         val KEY_BACKGROUND_LOCATION_BANNER_DISMISSED = booleanPreferencesKey("bg_location_banner_dismissed")
+        val KEY_SHORTCUT_MIGRATION_DONE = booleanPreferencesKey("shortcut_migration_done")
     }
 
     suspend fun setBoolean(key: Preferences.Key<Boolean>, value: Boolean) {
