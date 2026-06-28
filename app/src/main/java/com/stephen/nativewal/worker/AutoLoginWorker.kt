@@ -5,9 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.location.LocationManager
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSuggestion
 import android.os.Handler
 import android.os.Looper
 import android.webkit.SslErrorHandler
@@ -30,7 +32,6 @@ import com.stephen.nativewal.data.repository.WifiConfigRepository
 import com.stephen.nativewal.util.dLog
 import com.stephen.nativewal.util.dLogError
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -38,6 +39,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration.Companion.milliseconds
@@ -112,10 +114,28 @@ class AutoLoginWorker(
 
             val currentSsid = getCurrentWifiSsid()
             if (currentSsid != ssid) {
-                val err = "Currently connected to: ${currentSsid ?: "none"}. Please connect to $ssid first."
-                val data = createErrorData(sessionId, step3.name, "Wrong connection", err)
-                publishProgress(sessionId, step3.name, "Wrong connection", err)
-                return Result.failure(data)
+                val autoConnectEnabled = settingsRepository.getBoolean(SettingsRepository.KEY_AUTO_CONNECT_ENABLED, false)
+                if (autoConnectEnabled) {
+                    publishProgress(sessionId, step3.name, "Not on $ssid. Attempting to connect...")
+                    dLog(TAG, "Auto-connect enabled. Current: $currentSsid, Target: $ssid")
+                    val connected = connectToWifi(ssid, sessionId)
+                    if (!connected) {
+                        val err = "Could not connect to $ssid. Please connect manually."
+                        val data = createErrorData(sessionId, step3.name, "Auto-connect failed", err)
+                        publishProgress(sessionId, step3.name, "Auto-connect failed", err)
+                        return Result.failure(data)
+                    }
+                    dLog(TAG, "Successfully connected to $ssid via auto-connect")
+                } else {
+                    val err = if (currentSsid == null) {
+                        "Not connected to any WiFi network. Please connect to $ssid and try again."
+                    } else {
+                        "Connected to \"$currentSsid\" instead of \"$ssid\". Switch networks and retry."
+                    }
+                    val data = createErrorData(sessionId, step3.name, "Wrong connection", err)
+                    publishProgress(sessionId, step3.name, "Wrong connection", err)
+                    return Result.failure(data)
+                }
             }
 
             // Check if internet is already reachable on this SSID (Early check)
@@ -233,6 +253,57 @@ class AutoLoginWorker(
         } catch (e: Exception) {
             null
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun connectToWifi(targetSsid: String, sessionId: String): Boolean {
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        val suggestion = WifiNetworkSuggestion.Builder()
+            .setSsid(targetSsid)
+            .build()
+
+        val status = wifiManager.addNetworkSuggestions(listOf(suggestion))
+        dLog(TAG, "Auto-connect: addNetworkSuggestions status: $status")
+
+        // Wait briefly for the suggestion to take effect
+        kotlinx.coroutines.delay(3000)
+
+        // Check if we connected to the target
+        val currentSsid = getCurrentWifiSsid()
+        if (currentSsid == targetSsid) {
+            dLog(TAG, "Auto-connect: suggestion worked, connected to $targetSsid")
+            wifiManager.removeNetworkSuggestions(listOf(suggestion))
+            return true
+        }
+
+        dLog(TAG, "Auto-connect: suggestion didn't switch, current=$currentSsid, opening WiFi settings")
+        publishProgress(sessionId, AutoLoginStep.VERIFYING_SSID.name, "Opening WiFi settings to connect to $targetSsid...")
+
+        // Fall back to opening WiFi settings for the user
+        val intent = Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        applicationContext.startActivity(intent)
+
+        // Poll for up to 30 seconds waiting for the user to connect
+        val startTime = System.currentTimeMillis()
+        val timeoutMs = 30_000L
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            kotlinx.coroutines.delay(2000)
+            val ssid = getCurrentWifiSsid()
+            dLog(TAG, "Auto-connect: polling SSID=$ssid")
+            if (ssid == targetSsid) {
+                dLog(TAG, "Auto-connect: user connected to $targetSsid")
+                wifiManager.removeNetworkSuggestions(listOf(suggestion))
+                return true
+            }
+        }
+
+        dLog(TAG, "Auto-connect: timed out waiting for user to connect to $targetSsid")
+        wifiManager.removeNetworkSuggestions(listOf(suggestion))
+        return false
     }
 
     private suspend fun isInternetReachable(): Boolean = withContext(IO) {

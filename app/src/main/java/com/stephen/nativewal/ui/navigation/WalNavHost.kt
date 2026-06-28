@@ -101,8 +101,12 @@ fun WalNavHost(
             val progressViewModel: AutoLoginProgressViewModel = viewModel(
                 factory = AutoLoginProgressViewModel.Factory(context.applicationContext, ssid)
             )
+            val debugViewModel: DebugViewModel = viewModel(
+                factory = DebugViewModel.Factory(context.applicationContext)
+            )
             AutoLoginProgressScreen(
                 viewModel = progressViewModel,
+                debugViewModel = debugViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 onEnableLocation = { activity?.enableLocationService() }
             )

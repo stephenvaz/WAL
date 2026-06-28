@@ -30,6 +30,7 @@ data class BackupPayload(
 data class DebugUiState(
     val debugLogsEnabled: Boolean = false,
     val connectivityCheckEnabled: Boolean = false,
+    val autoConnectEnabled: Boolean = false,
     val toastMessage: String? = null
 )
 
@@ -56,10 +57,12 @@ class DebugViewModel(
         viewModelScope.launch {
             val debugEnabled = settingsRepository.getBoolean(SettingsRepository.KEY_DEBUG_LOGS_ENABLED)
             val connectivityEnabled = settingsRepository.getBoolean(SettingsRepository.KEY_CONNECTIVITY_CHECK)
+            val autoConnectEnabled = settingsRepository.getBoolean(SettingsRepository.KEY_AUTO_CONNECT_ENABLED)
             _uiState.update {
                 it.copy(
                     debugLogsEnabled = debugEnabled,
-                    connectivityCheckEnabled = connectivityEnabled
+                    connectivityCheckEnabled = connectivityEnabled,
+                    autoConnectEnabled = autoConnectEnabled
                 )
             }
         }
@@ -81,6 +84,13 @@ class DebugViewModel(
         viewModelScope.launch {
             settingsRepository.setBoolean(SettingsRepository.KEY_CONNECTIVITY_CHECK, enabled)
             _uiState.update { it.copy(connectivityCheckEnabled = enabled) }
+        }
+    }
+
+    fun setAutoConnectEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setBoolean(SettingsRepository.KEY_AUTO_CONNECT_ENABLED, enabled)
+            _uiState.update { it.copy(autoConnectEnabled = enabled) }
         }
     }
 

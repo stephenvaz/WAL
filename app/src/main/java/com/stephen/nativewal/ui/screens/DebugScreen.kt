@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -167,6 +168,27 @@ fun DebugScreen(
                     Switch(
                         checked = uiState.connectivityCheckEnabled,
                         onCheckedChange = { viewModel.setConnectivityCheckEnabled(it) }
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // Auto-connect toggle
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Wifi, contentDescription = null, tint = Color(0xFF2196F3))
+                    Spacer(Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-Connect to WiFi", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Show system dialog to connect if not on target network",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = uiState.autoConnectEnabled,
+                        onCheckedChange = { viewModel.setAutoConnectEnabled(it) }
                     )
                 }
 
