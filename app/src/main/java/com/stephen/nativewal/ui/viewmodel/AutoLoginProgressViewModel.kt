@@ -100,7 +100,7 @@ class AutoLoginProgressViewModel(
             }
 
             val nextError = if (isNewSession) progressError else (progressError ?: if (isFailed) currentState.errorMessage else null)
-            val nextLocErr = if (isNewSession) isLocErr else (if (isLocErr) true else (if (isFailed) currentState.isLocationError else false))
+            val nextLocErr = if (isNewSession) isLocErr else isLocErr
 
             currentState.copy(
                 currentStep = nextStep,

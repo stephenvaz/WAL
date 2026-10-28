@@ -34,6 +34,7 @@ import com.stephen.nativewal.util.dLogError
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.HttpURLConnection
 import java.net.URL
@@ -107,9 +108,20 @@ class AutoLoginWorker(
 
             if (!isLocationEnabled()) {
                 val err = "Location is OFF. Android requires location to identify WiFi networks."
-                val data = createErrorData(sessionId, step3.name, "Location disabled", err, isLocationError = true)
                 publishProgress(sessionId, step3.name, "Location disabled", err, isLocationError = true)
-                return Result.failure(data)
+                dLog(TAG, "Location is disabled, waiting up to 30s for user to enable it...")
+
+                // Wait for the user to enable location (the UI shows the "Turn on Location" button)
+                val locationEnabled = waitForLocationEnabled(timeoutMs = 30_000L, pollIntervalMs = 1_000L)
+
+                if (!locationEnabled) {
+                    dLog(TAG, "Location was not enabled within timeout, failing")
+                    val data = createErrorData(sessionId, step3.name, "Location disabled", err, isLocationError = true)
+                    return Result.failure(data)
+                }
+
+                dLog(TAG, "Location was enabled by user, continuing...")
+                publishProgress(sessionId, step3.name, "Location enabled, continuing...")
             }
 
             val currentSsid = getCurrentWifiSsid()
@@ -138,19 +150,6 @@ class AutoLoginWorker(
                 }
             }
 
-            // Check if internet is already reachable on this SSID (Early check)
-            val connectivityVerificationEnabled = settingsRepository.getBoolean(SettingsRepository.KEY_CONNECTIVITY_CHECK, false)
-            if (connectivityVerificationEnabled && isInternetReachable()) {
-                val msg = "Already connected to the internet on $ssid."
-                publishProgress(sessionId, AutoLoginStep.COMPLETED.name, msg)
-                showNotification(ssid, true, "Already connected on $ssid.")
-                return Result.success(workDataOf(
-                    KEY_SESSION_ID to sessionId,
-                    KEY_PROGRESS_STEP to AutoLoginStep.COMPLETED.name,
-                    KEY_PROGRESS_MESSAGE to msg
-                ))
-            }
-
             // --- Step 4: Binding Network ---
             val step4 = AutoLoginStep.BINDING_WIFI_NETWORK
             publishProgress(sessionId, step4.name, "Latching to the WiFi network")
@@ -162,20 +161,24 @@ class AutoLoginWorker(
                 return Result.failure(data)
             }
 
-            // Post-bind connectivity probe: ONLY skip if verification is enabled AND probe succeeds
+            // Post-bind connectivity check: now that traffic is routed through WiFi,
+            // check if internet is already reachable (e.g. no captive portal, or already logged in)
+            val connectivityVerificationEnabled = settingsRepository.getBoolean(SettingsRepository.KEY_CONNECTIVITY_CHECK, false)
             if (connectivityVerificationEnabled && isInternetReachable()) {
                 val stepValidated = AutoLoginStep.VALIDATING_CONNECTION
                 publishProgress(sessionId, stepValidated.name, "Verifying internet access...")
                 val validated = validateWifiNetwork()
+                dLog(TAG, "Post-bind connectivity validation result: $validated")
                 if (validated) {
-                    publishProgress(sessionId, AutoLoginStep.COMPLETED.name, "Logged in successfully")
-                    showNotification(ssid, true, "Already connected to internet.")
-                    return Result.success()
+                    publishProgress(sessionId, AutoLoginStep.COMPLETED.name, "Already connected to the internet on $ssid.")
+                    showNotification(ssid, true, "Already connected on $ssid.")
+                    return Result.success(workDataOf(
+                        KEY_SESSION_ID to sessionId,
+                        KEY_PROGRESS_STEP to AutoLoginStep.COMPLETED.name,
+                        KEY_PROGRESS_MESSAGE to "Already connected to the internet on $ssid."
+                    ))
                 } else {
-                    val err = "Connected but internet probe failed."
-                    val data = createErrorData(sessionId, stepValidated.name, "Probe failed", err)
-                    publishProgress(sessionId, stepValidated.name, "Probe failed", err)
-                    return Result.failure(data)
+                    dLog(TAG, "Post-bind validation failed, proceeding to captive portal login")
                 }
             }
 
@@ -212,6 +215,19 @@ class AutoLoginWorker(
     private fun isLocationEnabled(): Boolean {
         val lm = applicationContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         return LocationManagerCompat.isLocationEnabled(lm)
+    }
+
+    /**
+     * Polls [isLocationEnabled] at the given interval until it returns true or the timeout expires.
+     * Returns true if location was enabled within the timeout, false otherwise.
+     */
+    private suspend fun waitForLocationEnabled(timeoutMs: Long, pollIntervalMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            delay(pollIntervalMs)
+            if (isLocationEnabled()) return true
+        }
+        return false
     }
 
     private fun createErrorData(sessionId: String, step: String, message: String, error: String, isLocationError: Boolean = false): Data {

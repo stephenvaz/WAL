@@ -114,7 +114,11 @@ fun AutoLoginProgressScreen(
         if (uiState.isFailed && uiState.isLocationError) {
             while (true) {
                 isLocationNowEnabled = checkLocationEnabled(context)
-                if (isLocationNowEnabled) break
+                if (isLocationNowEnabled) {
+                    // Location was enabled after worker failed — auto-retry
+                    viewModel.retry()
+                    break
+                }
                 delay(1500)
             }
         }
@@ -449,9 +453,17 @@ private fun TimelineItem(
 
                     if (active) {
                         Text(
-                            text = "In progress...",
+                            text = if (isLocationError && !isLocationNowEnabled) {
+                                errorMessage ?: "Waiting for location to be enabled..."
+                            } else {
+                                "In progress..."
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = if (isLocationError && !isLocationNowEnabled) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
                         )
                     } else if (failed) {
                         Text(
@@ -464,31 +476,31 @@ private fun TimelineItem(
                 }
             }
 
-            // --- Inline Actions (Inside the failed step's card) ---
-            if (failed) {
+            // --- Inline Actions ---
+            // Location errors always show "Turn on Location" — retry auto-starts once enabled
+            if ((active || failed) && isLocationError && !isLocationNowEnabled) {
                 Spacer(Modifier.height(16.dp))
-                if (isLocationError && !isLocationNowEnabled) {
-                    Button(
-                        onClick = onEnableLocation,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        Icon(Icons.Default.LocationOn, contentDescription = null)
-                        Spacer(Modifier.size(8.dp))
-                        Text("Turn on Device Location")
-                    }
-                } else if (canRetry) {
-                    Button(
-                        onClick = onRetry,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null)
-                        Spacer(Modifier.size(8.dp))
-                        Text("Retry this step")
-                    }
+                Button(
+                    onClick = onEnableLocation,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Icon(Icons.Default.LocationOn, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Turn on Device Location")
+                }
+            } else if (failed && canRetry) {
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onRetry,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Retry this step")
                 }
             }
         }
